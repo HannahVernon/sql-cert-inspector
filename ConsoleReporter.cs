@@ -165,25 +165,52 @@ public static class ConsoleReporter
 
     private static string FormatKeyExchange(ConnectionSecurityInfo info)
     {
-        if (info.KeyExchangeAlgorithm == null || info.KeyExchangeAlgorithm == "None")
+        if (info.KeyExchangeAlgorithm == null || info.KeyExchangeAlgorithm == "None" || info.KeyExchangeAlgorithm == "0")
         {
             return "N/A (TLS 1.3 — key exchange is implicit)";
         }
+
+        string name = MapKeyExchangeAlgorithm(info.KeyExchangeAlgorithm);
         return info.KeyExchangeStrength > 0
-            ? $"{info.KeyExchangeAlgorithm} ({info.KeyExchangeStrength} bits)"
-            : info.KeyExchangeAlgorithm;
+            ? $"{name} ({info.KeyExchangeStrength} bits)"
+            : name;
     }
 
     private static string FormatHash(ConnectionSecurityInfo info)
     {
-        if (info.HashAlgorithm == null || info.HashAlgorithm == "None")
+        if (info.HashAlgorithm == null || info.HashAlgorithm == "None" || info.HashAlgorithm == "0")
         {
             return "N/A (TLS 1.3 — hash is part of cipher suite)";
         }
+
+        string name = MapHashAlgorithm(info.HashAlgorithm);
         return info.HashStrength > 0
-            ? $"{info.HashAlgorithm} ({info.HashStrength} bits)"
-            : info.HashAlgorithm;
+            ? $"{name} ({info.HashStrength} bits)"
+            : name;
     }
+
+    /// <summary>
+    /// Maps raw ExchangeAlgorithmType values to human-readable names.
+    /// .NET returns numeric values for algorithms not in the enum.
+    /// </summary>
+    private static string MapKeyExchangeAlgorithm(string raw) => raw switch
+    {
+        "44550" => "ECDHE",
+        "41984" => "RSA",
+        "43522" => "DH",
+        "9216"  => "RSA (signature)",
+        _       => raw
+    };
+
+    private static string MapHashAlgorithm(string raw) => raw switch
+    {
+        "Sha1"   => "SHA-1",
+        "Sha256" => "SHA-256",
+        "Sha384" => "SHA-384",
+        "Sha512" => "SHA-512",
+        "Md5"    => "MD5",
+        _        => raw
+    };
 
     private static void WriteHeader(string title)
     {

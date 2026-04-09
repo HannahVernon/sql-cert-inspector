@@ -38,9 +38,9 @@ public static class JsonReporter
             {
                 Protocol = info.TlsProtocolVersion,
                 CipherSuite = info.CipherSuite,
-                KeyExchangeAlgorithm = info.KeyExchangeAlgorithm,
+                KeyExchangeAlgorithm = MapKeyExchangeAlgorithm(info.KeyExchangeAlgorithm),
                 KeyExchangeStrength = info.KeyExchangeStrength,
-                HashAlgorithm = info.HashAlgorithm,
+                HashAlgorithm = MapHashAlgorithm(info.HashAlgorithm),
                 HashStrength = info.HashStrength
             };
         }
@@ -90,6 +90,25 @@ public static class JsonReporter
         KeyUsage = cert.KeyUsage,
         EnhancedKeyUsage = cert.EnhancedKeyUsage.Count > 0 ? cert.EnhancedKeyUsage : null,
         SubjectAlternativeNames = cert.SubjectAlternativeNames.Count > 0 ? cert.SubjectAlternativeNames : null
+    };
+
+    private static string? MapKeyExchangeAlgorithm(string? raw) => raw switch
+    {
+        "44550" => "ECDHE",
+        "41984" => "RSA",
+        "43522" => "DH",
+        "9216"  => "RSA (signature)",
+        _       => raw
+    };
+
+    private static string? MapHashAlgorithm(string? raw) => raw switch
+    {
+        "Sha1"   => "SHA-1",
+        "Sha256" => "SHA-256",
+        "Sha384" => "SHA-384",
+        "Sha512" => "SHA-512",
+        "Md5"    => "MD5",
+        _        => raw
     };
 
     /* JSON shape classes */
