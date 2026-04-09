@@ -1,0 +1,223 @@
+namespace SqlCertInspector;
+
+/// <summary>
+/// Renders <see cref="ConnectionSecurityInfo"/> as colored plain text to the console.
+/// Auto-detects redirected output and suppresses colors accordingly.
+/// </summary>
+public static class ConsoleReporter
+{
+    private static bool _colorsEnabled;
+
+    public static void Report(ConnectionSecurityInfo info, bool noColor)
+    {
+        _colorsEnabled = !noColor && !Console.IsOutputRedirected;
+
+        WriteHeader("Connection Details");
+        WriteField("Server", info.ServerName);
+        WriteField("Resolved Host", info.ResolvedHost);
+        WriteField("Resolved Port", info.ResolvedPort.ToString());
+        if (info.InstanceName != null)
+        {
+            WriteField("Instance Name", info.InstanceName);
+        }
+        if (info.SqlServerVersion != null)
+        {
+            WriteField("SQL Server Version", info.SqlServerVersion);
+        }
+        WriteField("Encryption Mode", info.EncryptionMode ?? "Unknown");
+        Console.WriteLine();
+
+        if (!info.IsEncrypted)
+        {
+            WriteColored($"Connection to {info.ServerName} is NOT encrypted.", ConsoleColor.Red);
+            Console.WriteLine();
+            Console.WriteLine();
+            WriteColored(
+                "The server does not support or require encryption for client connections.",
+                ConsoleColor.Yellow);
+            Console.WriteLine();
+            return;
+        }
+
+        WriteHeader("TLS Connection Security");
+        WriteField("TLS Protocol", info.TlsProtocolVersion ?? "Unknown");
+        WriteField("Cipher Suite", info.CipherSuite ?? "Unknown");
+        WriteField("Key Exchange", FormatKeyExchange(info));
+        WriteField("Hash Algorithm", FormatHash(info));
+        Console.WriteLine();
+
+        if (info.Certificate != null)
+        {
+            ReportCertificate(info.Certificate, "Server Certificate");
+
+            if (info.Certificate.ChainCertificates is { Count: > 0 } chain)
+            {
+                Console.WriteLine();
+                WriteHeader("Certificate Chain");
+                for (int i = 0; i < chain.Count; i++)
+                {
+                    string label = i == 0
+                        ? "Leaf (Server)"
+                        : i == chain.Count - 1
+                            ? "Root CA"
+                            : $"Intermediate CA ({i})";
+                    ReportCertificate(chain[i], label);
+                    if (i < chain.Count - 1) Console.WriteLine();
+                }
+
+                if (info.Certificate.ChainStatusMessages.Count > 0)
+                {
+                    Console.WriteLine();
+                    WriteHeader("Chain Validation");
+                    foreach (string msg in info.Certificate.ChainStatusMessages)
+                    {
+                        WriteColored($"  {msg}", ConsoleColor.Yellow);
+                        Console.WriteLine();
+                    }
+                }
+            }
+
+            if (info.Certificate.Warnings.Count > 0)
+            {
+                Console.WriteLine();
+                ReportWarnings(info.Certificate.Warnings);
+            }
+            else
+            {
+                Console.WriteLine();
+                WriteColored("✓ No certificate issues detected.", ConsoleColor.Green);
+                Console.WriteLine();
+            }
+        }
+    }
+
+    private static void ReportCertificate(CertificateInfo cert, string title)
+    {
+        WriteHeader(title);
+        WriteField("Subject", cert.Subject);
+        WriteField("Issuer", cert.Issuer);
+        WriteField("Serial Number", cert.SerialNumber);
+        WriteField("Thumbprint (SHA-1)", cert.ThumbprintSha1);
+        WriteField("Fingerprint (SHA-256)", cert.ThumbprintSha256);
+        WriteField("Valid From", $"{cert.ValidFrom:yyyy-MM-dd HH:mm:ss} UTC");
+        WriteField("Valid To", FormatExpiry(cert));
+        WriteField("Key Algorithm", $"{cert.KeyAlgorithm} ({cert.KeySizeBits} bits)");
+        WriteField("Signature Algorithm", cert.SignatureAlgorithm);
+        WriteField("Certificate Version", $"V{cert.Version}");
+        WriteField("Self-Signed", cert.IsSelfSigned ? "Yes" : "No");
+        WriteField("Is CA", cert.IsCA ? "Yes" : "No");
+
+        if (cert.KeyUsage != null)
+        {
+            WriteField("Key Usage", cert.KeyUsage);
+        }
+        if (cert.EnhancedKeyUsage.Count > 0)
+        {
+            WriteField("Enhanced Key Usage", string.Join(", ", cert.EnhancedKeyUsage));
+        }
+        if (cert.SubjectAlternativeNames.Count > 0)
+        {
+            WriteField("SANs", string.Join(", ", cert.SubjectAlternativeNames));
+        }
+        else
+        {
+            WriteField("SANs", "(none)");
+        }
+    }
+
+    private static void ReportWarnings(List<CertificateWarning> warnings)
+    {
+        WriteHeader("Certificate Health Checks");
+        foreach (var warning in warnings)
+        {
+            string icon = warning.Severity switch
+            {
+                WarningSeverity.Error => "✗",
+                WarningSeverity.Warning => "⚠",
+                WarningSeverity.Info => "ℹ",
+                _ => "?"
+            };
+            ConsoleColor color = warning.Severity switch
+            {
+                WarningSeverity.Error => ConsoleColor.Red,
+                WarningSeverity.Warning => ConsoleColor.Yellow,
+                WarningSeverity.Info => ConsoleColor.Cyan,
+                _ => ConsoleColor.Gray
+            };
+            WriteColored($"  {icon} {warning.Message}", color);
+            Console.WriteLine();
+        }
+    }
+
+    private static string FormatExpiry(CertificateInfo cert)
+    {
+        string expiry = $"{cert.ValidTo:yyyy-MM-dd HH:mm:ss} UTC";
+        if (cert.DaysUntilExpiry < 0)
+        {
+            expiry += $" (EXPIRED {Math.Abs(cert.DaysUntilExpiry)} days ago)";
+        }
+        else
+        {
+            expiry += $" ({cert.DaysUntilExpiry} days remaining)";
+        }
+        return expiry;
+    }
+
+    private static string FormatKeyExchange(ConnectionSecurityInfo info)
+    {
+        if (info.KeyExchangeAlgorithm == null || info.KeyExchangeAlgorithm == "None")
+        {
+            return "N/A (TLS 1.3 — key exchange is implicit)";
+        }
+        return info.KeyExchangeStrength > 0
+            ? $"{info.KeyExchangeAlgorithm} ({info.KeyExchangeStrength} bits)"
+            : info.KeyExchangeAlgorithm;
+    }
+
+    private static string FormatHash(ConnectionSecurityInfo info)
+    {
+        if (info.HashAlgorithm == null || info.HashAlgorithm == "None")
+        {
+            return "N/A (TLS 1.3 — hash is part of cipher suite)";
+        }
+        return info.HashStrength > 0
+            ? $"{info.HashAlgorithm} ({info.HashStrength} bits)"
+            : info.HashAlgorithm;
+    }
+
+    private static void WriteHeader(string title)
+    {
+        WriteColored($"═══ {title} ═══", ConsoleColor.Cyan);
+        Console.WriteLine();
+    }
+
+    private static void WriteField(string label, string value)
+    {
+        string paddedLabel = $"  {label,-25}";
+        if (_colorsEnabled)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write(paddedLabel);
+            Console.ResetColor();
+            Console.WriteLine($" {value}");
+        }
+        else
+        {
+            Console.WriteLine($"{paddedLabel} {value}");
+        }
+    }
+
+    private static void WriteColored(string text, ConsoleColor color)
+    {
+        if (_colorsEnabled)
+        {
+            Console.ForegroundColor = color;
+            Console.Write(text);
+            Console.ResetColor();
+        }
+        else
+        {
+            Console.Write(text);
+        }
+    }
+}
