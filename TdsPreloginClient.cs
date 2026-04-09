@@ -74,12 +74,12 @@ public sealed class TdsPreloginClient : IDisposable
         await _networkStream.WriteAsync(preloginPacket, ct);
         await _networkStream.FlushAsync(ct);
 
-        /* Read PRELOGIN response */
+        /* Read PRELOGIN response — the server responds with packet type 0x04 (Tabular Result), not 0x12 */
         var (type, status, responsePayload) = await TdsPacket.ReadAsync(_networkStream, ct);
-        if (type != TdsPacket.TypePreLogin)
+        if (type != TdsPacket.TypeTabularResult)
         {
             throw new ConnectionException(
-                $"Expected TDS PRELOGIN response (type 0x12), but received type 0x{type:X2}. " +
+                $"Expected TDS PRELOGIN response (type 0x04), but received type 0x{type:X2}. " +
                 "This may not be a SQL Server instance.");
         }
 

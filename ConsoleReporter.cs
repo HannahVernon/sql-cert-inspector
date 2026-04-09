@@ -85,9 +85,16 @@ public static class ConsoleReporter
             else
             {
                 Console.WriteLine();
-                WriteColored("✓ No certificate issues detected.", ConsoleColor.Green);
+                WriteColored("[PASS] No certificate issues detected.", ConsoleColor.Green);
                 Console.WriteLine();
             }
+        }
+
+        /* Kerberos diagnostics */
+        if (info.Kerberos != null)
+        {
+            Console.WriteLine();
+            ReportKerberos(info.Kerberos);
         }
     }
 
@@ -128,25 +135,120 @@ public static class ConsoleReporter
     private static void ReportWarnings(List<CertificateWarning> warnings)
     {
         WriteHeader("Certificate Health Checks");
-        foreach (var warning in warnings)
+        WriteWarningList(warnings);
+    }
+
+    private static void ReportKerberos(KerberosDiagnostics kerberos)
+    {
+        WriteHeader("DNS Resolution");
+        WriteField("Requested Hostname", kerberos.RequestedHostname);
+
+        if (kerberos.DnsError != null)
         {
-            string icon = warning.Severity switch
+            WriteField("DNS Error", kerberos.DnsError);
+        }
+        else
+        {
+            WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
+                ? string.Join(", ", kerberos.ResolvedIpAddresses)
+                : "(none)");
+            WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
+            WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
+
+            if (kerberos.CnameTarget != null)
             {
-                WarningSeverity.Error => "✗",
-                WarningSeverity.Warning => "⚠",
-                WarningSeverity.Info => "ℹ",
-                _ => "?"
-            };
-            ConsoleColor color = warning.Severity switch
+                WriteField("CNAME Target", kerberos.CnameTarget);
+            }
+        }
+
+        Console.WriteLine();
+        WriteHeader("Kerberos SPN Registration");
+        WriteField("Expected SPN (port)", kerberos.ExpectedSpnWithPort);
+        WriteField("Expected SPN (base)", kerberos.ExpectedSpnWithoutPort);
+
+        if (kerberos.SpnLookupError != null)
+        {
+            WriteField("SPN Lookup Error", kerberos.SpnLookupError);
+        }
+        else
+        {
+            if (kerberos.SpnWithPort != null)
             {
-                WarningSeverity.Error => ConsoleColor.Red,
-                WarningSeverity.Warning => ConsoleColor.Yellow,
-                WarningSeverity.Info => ConsoleColor.Cyan,
-                _ => ConsoleColor.Gray
-            };
-            WriteColored($"  {icon} {warning.Message}", color);
+                ReportSpn(kerberos.SpnWithPort, "Port SPN");
+            }
+            if (kerberos.SpnWithoutPort != null)
+            {
+                ReportSpn(kerberos.SpnWithoutPort, "Base SPN");
+            }
+        }
+
+        if (kerberos.Warnings.Count > 0)
+        {
+            Console.WriteLine();
+            WriteHeader("Kerberos Health Checks");
+            WriteWarningList(kerberos.Warnings);
+        }
+        else
+        {
+            Console.WriteLine();
+            WriteColored("[PASS] No Kerberos issues detected.", ConsoleColor.Green);
             Console.WriteLine();
         }
+    }
+
+    private static void ReportSpn(SpnLookupResult spn, string label)
+    {
+        if (spn.Found)
+        {
+            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
+            WriteColored("REGISTERED", ConsoleColor.Green);
+            string account = spn.AccountName != null
+                ? $" → {spn.AccountName} ({spn.AccountType})"
+                : "";
+            Console.WriteLine(account);
+        }
+        else
+        {
+            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
+            WriteColored("NOT FOUND", ConsoleColor.Yellow);
+            Console.WriteLine();
+        }
+    }
+
+    private static void WriteWarningList(IEnumerable<KerberosWarning> warnings)
+    {
+        foreach (var warning in warnings)
+        {
+            WriteWarningLine(warning.Severity, warning.Message);
+        }
+    }
+
+    private static void WriteWarningList(List<CertificateWarning> warnings)
+    {
+        foreach (var warning in warnings)
+        {
+            WriteWarningLine(warning.Severity, warning.Message);
+        }
+    }
+
+    private static void WriteWarningLine(WarningSeverity severity, string message)
+    {
+        string icon = severity switch
+        {
+            WarningSeverity.Error => "[FAIL]",
+            WarningSeverity.Warning => "[WARN]",
+            WarningSeverity.Info => "[INFO]",
+            _ => "?"
+        };
+        ConsoleColor color = severity switch
+        {
+            WarningSeverity.Error => ConsoleColor.Red,
+            WarningSeverity.Warning => ConsoleColor.Yellow,
+            WarningSeverity.Info => ConsoleColor.Cyan,
+            _ => ConsoleColor.Gray
+        };
+        WriteColored($"  {icon} {message}", color);
+        Console.WriteLine();
     }
 
     private static string FormatExpiry(CertificateInfo cert)
@@ -165,25 +267,52 @@ public static class ConsoleReporter
 
     private static string FormatKeyExchange(ConnectionSecurityInfo info)
     {
-        if (info.KeyExchangeAlgorithm == null || info.KeyExchangeAlgorithm == "None")
+        if (info.KeyExchangeAlgorithm == null || info.KeyExchangeAlgorithm == "None" || info.KeyExchangeAlgorithm == "0")
         {
             return "N/A (TLS 1.3 — key exchange is implicit)";
         }
+
+        string name = MapKeyExchangeAlgorithm(info.KeyExchangeAlgorithm);
         return info.KeyExchangeStrength > 0
-            ? $"{info.KeyExchangeAlgorithm} ({info.KeyExchangeStrength} bits)"
-            : info.KeyExchangeAlgorithm;
+            ? $"{name} ({info.KeyExchangeStrength} bits)"
+            : name;
     }
 
     private static string FormatHash(ConnectionSecurityInfo info)
     {
-        if (info.HashAlgorithm == null || info.HashAlgorithm == "None")
+        if (info.HashAlgorithm == null || info.HashAlgorithm == "None" || info.HashAlgorithm == "0")
         {
             return "N/A (TLS 1.3 — hash is part of cipher suite)";
         }
+
+        string name = MapHashAlgorithm(info.HashAlgorithm);
         return info.HashStrength > 0
-            ? $"{info.HashAlgorithm} ({info.HashStrength} bits)"
-            : info.HashAlgorithm;
+            ? $"{name} ({info.HashStrength} bits)"
+            : name;
     }
+
+    /// <summary>
+    /// Maps raw ExchangeAlgorithmType values to human-readable names.
+    /// .NET returns numeric values for algorithms not in the enum.
+    /// </summary>
+    private static string MapKeyExchangeAlgorithm(string raw) => raw switch
+    {
+        "44550" => "ECDHE",
+        "41984" => "RSA",
+        "43522" => "DH",
+        "9216"  => "RSA (signature)",
+        _       => raw
+    };
+
+    private static string MapHashAlgorithm(string raw) => raw switch
+    {
+        "Sha1"   => "SHA-1",
+        "Sha256" => "SHA-256",
+        "Sha384" => "SHA-384",
+        "Sha512" => "SHA-512",
+        "Md5"    => "MD5",
+        _        => raw
+    };
 
     private static void WriteHeader(string title)
     {

@@ -13,6 +13,7 @@ public static class TdsPacket
 {
     public const int HeaderSize = 8;
     public const byte TypePreLogin = 0x12;
+    public const byte TypeTabularResult = 0x04;
     public const byte StatusEom = 0x01;
     public const byte StatusNormal = 0x00;
 

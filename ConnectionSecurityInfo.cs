@@ -28,4 +28,9 @@ public sealed class ConnectionSecurityInfo
     /// The server certificate extracted from the TLS handshake.
     /// </summary>
     public CertificateInfo? Certificate { get; set; }
+
+    /// <summary>
+    /// Kerberos and DNS diagnostic results. Null if skipped.
+    /// </summary>
+    public KerberosDiagnostics? Kerberos { get; set; }
 }
