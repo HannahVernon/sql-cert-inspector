@@ -18,16 +18,36 @@ public static class KerberosInspector
     {
         var diag = new KerberosDiagnostics
         {
-            RequestedHostname = hostname
+            RequestedHostname = hostname,
+            ExpectedSpns = BuildExpectedSpns(hostname, port, instanceName)
         };
 
-        /* Build the short (NetBIOS) hostname from the FQDN */
-        string shortName = hostname.Split('.')[0];
-        bool hasShortName = !string.Equals(shortName, hostname, StringComparison.OrdinalIgnoreCase);
+        PerformDnsResolution(diag, hostname);
+        PerformSpnLookup(diag);
+
+        bool isNamedInstance = instanceName != null;
+        RunHealthChecks(diag, port, isNamedInstance);
+
+        return diag;
+    }
+
+    /// <summary>
+    /// Builds the list of expected SPN variants for a given SQL Server endpoint.
+    /// Visible for unit testing.
+    /// </summary>
+    public static List<SpnExpectation> BuildExpectedSpns(string hostname, int port, string? instanceName)
+    {
+        var spns = new List<SpnExpectation>();
         bool isNamedInstance = instanceName != null;
 
-        /* Build all expected SPN variants */
-        diag.ExpectedSpns.Add(new SpnExpectation
+        /* Build the short (NetBIOS) hostname from the FQDN.
+           Skip short-name SPNs when the hostname is an IP address. */
+        string shortName = hostname.Split('.')[0];
+        bool hasShortName = !IPAddress.TryParse(hostname, out _) &&
+                            !string.Equals(shortName, hostname, StringComparison.OrdinalIgnoreCase);
+
+        /* FQDN + Port — always present */
+        spns.Add(new SpnExpectation
         {
             Label = "FQDN + Port",
             Spn = $"{SpnServiceClass}/{hostname}:{port}"
@@ -35,7 +55,7 @@ public static class KerberosInspector
 
         if (isNamedInstance)
         {
-            diag.ExpectedSpns.Add(new SpnExpectation
+            spns.Add(new SpnExpectation
             {
                 Label = "FQDN + Instance",
                 Spn = $"{SpnServiceClass}/{hostname}:{instanceName}"
@@ -44,7 +64,7 @@ public static class KerberosInspector
 
         if (hasShortName)
         {
-            diag.ExpectedSpns.Add(new SpnExpectation
+            spns.Add(new SpnExpectation
             {
                 Label = "Short + Port",
                 Spn = $"{SpnServiceClass}/{shortName}:{port}"
@@ -52,7 +72,7 @@ public static class KerberosInspector
 
             if (isNamedInstance)
             {
-                diag.ExpectedSpns.Add(new SpnExpectation
+                spns.Add(new SpnExpectation
                 {
                     Label = "Short + Instance",
                     Spn = $"{SpnServiceClass}/{shortName}:{instanceName}"
@@ -61,7 +81,7 @@ public static class KerberosInspector
         }
 
         /* Base SPNs (no port/instance — used for default instances) */
-        diag.ExpectedSpns.Add(new SpnExpectation
+        spns.Add(new SpnExpectation
         {
             Label = "FQDN (base)",
             Spn = $"{SpnServiceClass}/{hostname}"
@@ -69,18 +89,14 @@ public static class KerberosInspector
 
         if (hasShortName)
         {
-            diag.ExpectedSpns.Add(new SpnExpectation
+            spns.Add(new SpnExpectation
             {
                 Label = "Short (base)",
                 Spn = $"{SpnServiceClass}/{shortName}"
             });
         }
 
-        PerformDnsResolution(diag, hostname);
-        PerformSpnLookup(diag);
-        RunHealthChecks(diag, port, isNamedInstance);
-
-        return diag;
+        return spns;
     }
 
     private static void PerformDnsResolution(KerberosDiagnostics diag, string hostname)
@@ -208,7 +224,7 @@ public static class KerberosInspector
             .Replace("\0", "\\00");
     }
 
-    private static void RunHealthChecks(KerberosDiagnostics diag, int port, bool isNamedInstance)
+    internal static void RunHealthChecks(KerberosDiagnostics diag, int port, bool isNamedInstance)
     {
         /* DNS issues */
         if (diag.DnsError != null)
