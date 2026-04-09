@@ -94,7 +94,7 @@ public static class CertificateAnalyzer
         return info;
     }
 
-    private static void RunHealthChecks(CertificateInfo info, string serverHost)
+    internal static void RunHealthChecks(CertificateInfo info, string serverHost)
     {
         /* Expired */
         if (info.ValidTo < DateTime.UtcNow)
@@ -156,7 +156,7 @@ public static class CertificateAnalyzer
         }
     }
 
-    private static bool HostnameMatchesCertificate(string host, CertificateInfo info)
+    internal static bool HostnameMatchesCertificate(string host, CertificateInfo info)
     {
         /* Check CN in Subject */
         string cn = ExtractCN(info.Subject);
@@ -187,7 +187,7 @@ public static class CertificateAnalyzer
         return false;
     }
 
-    private static string ExtractCN(string subject)
+    internal static string ExtractCN(string subject)
     {
         /* Parse "CN=something, O=..." */
         foreach (string part in subject.Split(','))
@@ -201,7 +201,7 @@ public static class CertificateAnalyzer
         return string.Empty;
     }
 
-    private static bool MatchesHostname(string host, string pattern)
+    internal static bool MatchesHostname(string host, string pattern)
     {
         if (string.Equals(host, pattern, StringComparison.OrdinalIgnoreCase))
         {
