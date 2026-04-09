@@ -13,20 +13,26 @@ public sealed class KerberosDiagnostics
     public string? CnameTarget { get; set; }
     public string? DnsError { get; set; }
 
-    /* SPN information */
-    public string ExpectedSpnWithPort { get; set; } = string.Empty;
-    public string ExpectedSpnWithoutPort { get; set; } = string.Empty;
-    public SpnLookupResult? SpnWithPort { get; set; }
-    public SpnLookupResult? SpnWithoutPort { get; set; }
+    /* SPN information — all expected variants and their lookup results */
+    public List<SpnExpectation> ExpectedSpns { get; set; } = new();
     public string? SpnLookupError { get; set; }
 
     /* Warnings */
     public List<KerberosWarning> Warnings { get; set; } = new();
 }
 
+/// <summary>
+/// Describes one expected SPN variant (e.g. FQDN:port, shortname:instance) and its lookup result.
+/// </summary>
+public sealed class SpnExpectation
+{
+    public string Label { get; set; } = string.Empty;
+    public string Spn { get; set; } = string.Empty;
+    public SpnLookupResult? Result { get; set; }
+}
+
 public sealed class SpnLookupResult
 {
-    public string Spn { get; set; } = string.Empty;
     public bool Found { get; set; }
     public string? AccountName { get; set; }
     public string? AccountType { get; set; }
