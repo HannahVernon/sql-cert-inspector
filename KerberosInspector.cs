@@ -14,20 +14,89 @@ public static class KerberosInspector
 {
     private const string SpnServiceClass = "MSSQLSvc";
 
-    public static KerberosDiagnostics Inspect(string hostname, int port, bool isNamedInstance)
+    public static KerberosDiagnostics Inspect(string hostname, int port, string? instanceName)
     {
         var diag = new KerberosDiagnostics
         {
             RequestedHostname = hostname,
-            ExpectedSpnWithPort = $"{SpnServiceClass}/{hostname}:{port}",
-            ExpectedSpnWithoutPort = $"{SpnServiceClass}/{hostname}"
+            ExpectedSpns = BuildExpectedSpns(hostname, port, instanceName)
         };
 
         PerformDnsResolution(diag, hostname);
         PerformSpnLookup(diag);
+
+        bool isNamedInstance = instanceName != null;
         RunHealthChecks(diag, port, isNamedInstance);
 
         return diag;
+    }
+
+    /// <summary>
+    /// Builds the list of expected SPN variants for a given SQL Server endpoint.
+    /// Visible for unit testing.
+    /// </summary>
+    public static List<SpnExpectation> BuildExpectedSpns(string hostname, int port, string? instanceName)
+    {
+        var spns = new List<SpnExpectation>();
+        bool isNamedInstance = instanceName != null;
+
+        /* Build the short (NetBIOS) hostname from the FQDN.
+           Skip short-name SPNs when the hostname is an IP address. */
+        string shortName = hostname.Split('.')[0];
+        bool hasShortName = !IPAddress.TryParse(hostname, out _) &&
+                            !string.Equals(shortName, hostname, StringComparison.OrdinalIgnoreCase);
+
+        /* FQDN + Port — always present */
+        spns.Add(new SpnExpectation
+        {
+            Label = "FQDN + Port",
+            Spn = $"{SpnServiceClass}/{hostname}:{port}"
+        });
+
+        if (isNamedInstance)
+        {
+            spns.Add(new SpnExpectation
+            {
+                Label = "FQDN + Instance",
+                Spn = $"{SpnServiceClass}/{hostname}:{instanceName}"
+            });
+        }
+
+        if (hasShortName)
+        {
+            spns.Add(new SpnExpectation
+            {
+                Label = "Short + Port",
+                Spn = $"{SpnServiceClass}/{shortName}:{port}"
+            });
+
+            if (isNamedInstance)
+            {
+                spns.Add(new SpnExpectation
+                {
+                    Label = "Short + Instance",
+                    Spn = $"{SpnServiceClass}/{shortName}:{instanceName}"
+                });
+            }
+        }
+
+        /* Base SPNs (no port/instance — used for default instances) */
+        spns.Add(new SpnExpectation
+        {
+            Label = "FQDN (base)",
+            Spn = $"{SpnServiceClass}/{hostname}"
+        });
+
+        if (hasShortName)
+        {
+            spns.Add(new SpnExpectation
+            {
+                Label = "Short (base)",
+                Spn = $"{SpnServiceClass}/{shortName}"
+            });
+        }
+
+        return spns;
     }
 
     private static void PerformDnsResolution(KerberosDiagnostics diag, string hostname)
@@ -78,8 +147,10 @@ public static class KerberosInspector
     {
         try
         {
-            diag.SpnWithPort = LookupSpn(diag.ExpectedSpnWithPort);
-            diag.SpnWithoutPort = LookupSpn(diag.ExpectedSpnWithoutPort);
+            foreach (var expected in diag.ExpectedSpns)
+            {
+                expected.Result = LookupSpn(expected.Spn);
+            }
         }
         catch (Exception ex)
         {
@@ -89,7 +160,7 @@ public static class KerberosInspector
 
     private static SpnLookupResult LookupSpn(string spn)
     {
-        var result = new SpnLookupResult { Spn = spn };
+        var result = new SpnLookupResult();
 
         try
         {
@@ -153,7 +224,7 @@ public static class KerberosInspector
             .Replace("\0", "\\00");
     }
 
-    private static void RunHealthChecks(KerberosDiagnostics diag, int port, bool isNamedInstance)
+    internal static void RunHealthChecks(KerberosDiagnostics diag, int port, bool isNamedInstance)
     {
         /* DNS issues */
         if (diag.DnsError != null)
@@ -184,42 +255,51 @@ public static class KerberosInspector
             return;
         }
 
-        bool portSpnFound = diag.SpnWithPort?.Found == true;
-        bool baseSpnFound = diag.SpnWithoutPort?.Found == true;
+        /* Categorize SPNs: port/instance-specific vs base */
+        var specificSpns = diag.ExpectedSpns.Where(s => s.Spn.Contains(':')).ToList();
+        var baseSpns = diag.ExpectedSpns.Where(s => !s.Spn.Contains(':')).ToList();
 
-        if (!portSpnFound && !baseSpnFound)
+        bool anySpecificFound = specificSpns.Any(s => s.Result?.Found == true);
+        bool anyBaseFound = baseSpns.Any(s => s.Result?.Found == true);
+
+        if (!anySpecificFound && !anyBaseFound)
         {
+            string allSpns = string.Join(", ", diag.ExpectedSpns.Select(s => $"'{s.Spn}'"));
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Error,
-                $"No SPN registered for this SQL Server instance. Neither '{diag.ExpectedSpnWithPort}' " +
-                $"nor '{diag.ExpectedSpnWithoutPort}' was found in Active Directory. " +
+                $"No SPN registered for this SQL Server instance. None of the expected SPNs " +
+                $"({allSpns}) were found in Active Directory. " +
                 "Kerberos authentication will NOT work — clients will fall back to NTLM."));
         }
-        else if (portSpnFound && !baseSpnFound && isNamedInstance)
+        else if (anySpecificFound && !anyBaseFound && isNamedInstance)
         {
-            /* Port-specific SPN exists, base SPN does not — this is correct and
-               preferred for named instances to avoid ambiguity with other instances. */
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
-                $"Port-specific SPN is registered and base SPN is absent. " +
+                "Port/instance-specific SPN(s) are registered and base SPN is absent. " +
                 "This is the expected configuration for a named instance — " +
                 "a base SPN without a port could conflict with other instances on the same host."));
         }
-        else if (!portSpnFound && baseSpnFound && port != 1433)
+        else if (!anySpecificFound && anyBaseFound && port != 1433)
         {
+            string missingSpecific = string.Join(", ", specificSpns.Select(s => $"'{s.Spn}'"));
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
-                $"Port-specific SPN '{diag.ExpectedSpnWithPort}' is not registered, but " +
-                $"base SPN '{diag.ExpectedSpnWithoutPort}' exists. Since this instance uses " +
-                $"a non-default port ({port}), the port-specific SPN is recommended."));
+                $"No port/instance-specific SPN found ({missingSpecific}), but a base SPN exists. " +
+                $"Since this instance uses a non-default port ({port}), a port-specific SPN is recommended."));
         }
 
-        /* Check for duplicate SPNs (same SPN on different accounts) */
-        if (portSpnFound && baseSpnFound &&
-            diag.SpnWithPort!.AccountName != null && diag.SpnWithoutPort!.AccountName != null &&
-            !string.Equals(diag.SpnWithPort.AccountName, diag.SpnWithoutPort.AccountName, StringComparison.OrdinalIgnoreCase))
+        /* Check for SPNs registered to different accounts */
+        var foundSpns = diag.ExpectedSpns
+            .Where(s => s.Result?.Found == true && s.Result.AccountName != null)
+            .ToList();
+
+        var distinctAccounts = foundSpns
+            .Select(s => s.Result!.AccountName!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (distinctAccounts.Count > 1)
         {
+            string details = string.Join("; ", foundSpns.Select(s => $"'{s.Spn}' → {s.Result!.AccountName}"));
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
-                $"Port SPN and base SPN are registered to different accounts: " +
-                $"'{diag.SpnWithPort.Spn}' → {diag.SpnWithPort.AccountName}, " +
-                $"'{diag.SpnWithoutPort.Spn}' → {diag.SpnWithoutPort.AccountName}. " +
+                $"SPNs are registered to different accounts: {details}. " +
                 "This may cause unpredictable Kerberos authentication behavior."));
         }
     }

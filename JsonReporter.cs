@@ -81,10 +81,14 @@ public static class JsonReporter
                     CnameTarget = info.Kerberos.CnameTarget,
                     DnsError = info.Kerberos.DnsError
                 },
-                ExpectedSpnWithPort = info.Kerberos.ExpectedSpnWithPort,
-                ExpectedSpnWithoutPort = info.Kerberos.ExpectedSpnWithoutPort,
-                SpnWithPort = MapSpn(info.Kerberos.SpnWithPort),
-                SpnWithoutPort = MapSpn(info.Kerberos.SpnWithoutPort),
+                Spns = info.Kerberos.ExpectedSpns.Select(e => new SpnJson
+                {
+                    Label = e.Label,
+                    Spn = e.Spn,
+                    Found = e.Result?.Found ?? false,
+                    AccountName = e.Result?.AccountName,
+                    AccountType = e.Result?.AccountType
+                }).ToList(),
                 SpnLookupError = info.Kerberos.SpnLookupError,
                 Warnings = info.Kerberos.Warnings.Count > 0
                     ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
@@ -95,14 +99,6 @@ public static class JsonReporter
         string json = JsonSerializer.Serialize(output, s_options);
         Console.WriteLine(json);
     }
-
-    private static SpnJson? MapSpn(SpnLookupResult? spn) => spn == null ? null : new SpnJson
-    {
-        Spn = spn.Spn,
-        Found = spn.Found,
-        AccountName = spn.AccountName,
-        AccountType = spn.AccountType
-    };
 
     private static CertificateJson MapCertificate(CertificateInfo cert) => new()
     {
@@ -208,10 +204,7 @@ public static class JsonReporter
     private sealed class KerberosJson
     {
         public DnsJson? Dns { get; set; }
-        public string ExpectedSpnWithPort { get; set; } = string.Empty;
-        public string ExpectedSpnWithoutPort { get; set; } = string.Empty;
-        public SpnJson? SpnWithPort { get; set; }
-        public SpnJson? SpnWithoutPort { get; set; }
+        public List<SpnJson> Spns { get; set; } = new();
         public string? SpnLookupError { get; set; }
         public List<WarningJson>? Warnings { get; set; }
     }
@@ -228,6 +221,7 @@ public static class JsonReporter
 
     private sealed class SpnJson
     {
+        public string Label { get; set; } = string.Empty;
         public string Spn { get; set; } = string.Empty;
         public bool Found { get; set; }
         public string? AccountName { get; set; }

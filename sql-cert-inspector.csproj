@@ -9,6 +9,7 @@
     <Nullable>enable</Nullable>
     <Authors>Hannah Vernon</Authors>
     <Description>SQL Server TLS certificate inspector — displays certificate details and connection security metadata without requiring authentication.</Description>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -18,6 +19,10 @@
     <PublishTrimmed>true</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="sql-cert-inspector.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" />

@@ -48,10 +48,14 @@ public static class ConsoleReporter
 
         if (info.Certificate != null)
         {
-            ReportCertificate(info.Certificate, "Server Certificate");
+            bool hasChain = info.Certificate.ChainCertificates is { Count: > 0 };
 
-            if (info.Certificate.ChainCertificates is { Count: > 0 } chain)
+            if (!hasChain)
+                ReportCertificate(info.Certificate, "Server Certificate");
+
+            if (hasChain)
             {
+                var chain = info.Certificate.ChainCertificates!;
                 Console.WriteLine();
                 WriteHeader("Certificate Chain");
                 for (int i = 0; i < chain.Count; i++)
@@ -163,8 +167,6 @@ public static class ConsoleReporter
 
         Console.WriteLine();
         WriteHeader("Kerberos SPN Registration");
-        WriteField("Expected SPN (port)", kerberos.ExpectedSpnWithPort);
-        WriteField("Expected SPN (base)", kerberos.ExpectedSpnWithoutPort);
 
         if (kerberos.SpnLookupError != null)
         {
@@ -172,13 +174,24 @@ public static class ConsoleReporter
         }
         else
         {
-            if (kerberos.SpnWithPort != null)
+            foreach (var expected in kerberos.ExpectedSpns)
             {
-                ReportSpn(kerberos.SpnWithPort, "Port SPN");
-            }
-            if (kerberos.SpnWithoutPort != null)
-            {
-                ReportSpn(kerberos.SpnWithoutPort, "Base SPN");
+                string status;
+                ConsoleColor color;
+                if (expected.Result?.Found == true)
+                {
+                    string account = expected.Result.AccountName ?? "unknown";
+                    string type = expected.Result.AccountType != null ? $" ({expected.Result.AccountType})" : "";
+                    status = $"REGISTERED → {account}{type}";
+                    color = ConsoleColor.Green;
+                }
+                else
+                {
+                    status = "NOT FOUND";
+                    color = ConsoleColor.Yellow;
+                }
+
+                WriteFieldColored(expected.Label, expected.Spn, status, color);
             }
         }
 
@@ -196,22 +209,23 @@ public static class ConsoleReporter
         }
     }
 
-    private static void ReportSpn(SpnLookupResult spn, string label)
+    private static void WriteFieldColored(string label, string spn, string status, ConsoleColor statusColor)
     {
-        if (spn.Found)
+        string paddedLabel = $"  {label,-20}";
+        if (_colorsEnabled)
         {
-            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
-            WriteColored("REGISTERED", ConsoleColor.Green);
-            string account = spn.AccountName != null
-                ? $" → {spn.AccountName} ({spn.AccountType})"
-                : "";
-            Console.WriteLine(account);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write(paddedLabel);
+            Console.ResetColor();
+            Console.Write($" {spn}  ");
+            Console.ForegroundColor = statusColor;
+            Console.Write(status);
+            Console.ResetColor();
+            Console.WriteLine();
         }
         else
         {
-            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
-            WriteColored("NOT FOUND", ConsoleColor.Yellow);
-            Console.WriteLine();
+            Console.WriteLine($"{paddedLabel} {spn}  {status}");
         }
     }
 
