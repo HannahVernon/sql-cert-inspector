@@ -1,6 +1,6 @@
 # sql-cert-inspector
 
-A command-line tool that inspects the TLS certificate used by a SQL Server instance to encrypt client connections. Connects at the raw TDS protocol level and captures the certificate from the TLS handshake **without requiring SQL Server authentication**.
+A command-line tool that inspects the TLS certificate and Kerberos configuration of a SQL Server instance. Connects at the raw TDS protocol level and captures the certificate from the TLS handshake **without requiring SQL Server authentication**.
 
 ## Features
 
@@ -9,6 +9,7 @@ A command-line tool that inspects the TLS certificate used by a SQL Server insta
 - **Connection security metadata** — TLS protocol version, cipher suite, SQL Server version, encryption mode
 - **Certificate health checks** — warns about expired certs, expiring soon, self-signed, hostname mismatch, weak keys, deprecated algorithms
 - **Full certificate chain** — optionally display intermediate and root CA certificates
+- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection, SPN account owner identification
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
 - **JSON output** — machine-readable output for scripting and automation
 - **Colored console output** — auto-detects redirected output, suppresses colors when piping
@@ -40,6 +41,7 @@ sql-cert-inspector --server <server> [options]
 | `--timeout <seconds>` | `-t` | Connection timeout in seconds (default: 5) |
 | `--json` | | Output in JSON format |
 | `--show-full-certificate-chain` | | Display the full certificate chain |
+| `--skip-kerberos` | | Skip Kerberos and DNS diagnostics |
 | `--no-color` | | Disable colored console output |
 | `--help` | | Show help |
 | `--version` | | Show version |
@@ -65,6 +67,9 @@ sql-cert-inspector --server myserver --json
 # Full certificate chain
 sql-cert-inspector --server myserver --show-full-certificate-chain
 
+# Skip Kerberos diagnostics
+sql-cert-inspector --server myserver --skip-kerberos
+
 # With custom timeout
 sql-cert-inspector --server myserver --timeout 10
 ```
@@ -72,39 +77,60 @@ sql-cert-inspector --server myserver --timeout 10
 ### Sample output
 
 ```
-Connecting to myserver on TCP port 1433...
+Resolving instance 'SQLPROD' via SQL Server Browser service on myserver.corp.example.com:1434 (UDP)...
+Resolved to TCP port 22136.
+Connecting to myserver.corp.example.com\SQLPROD on TCP port 22136...
+Running Kerberos and DNS diagnostics...
 
 ═══ Connection Details ═══
-  Server                     myserver
-  Resolved Host              myserver
-  Resolved Port              1433
-  SQL Server Version         16.0.4175.1
-  Encryption Mode            ON
+  Server                    myserver.corp.example.com\SQLPROD
+  Resolved Host             myserver.corp.example.com
+  Resolved Port             22136
+  Instance Name             SQLPROD
+  SQL Server Version        15.0.4455.0
+  Encryption Mode           ON
 
 ═══ TLS Connection Security ═══
-  TLS Protocol               Tls13
-  Cipher Suite               TLS_AES_256_GCM_SHA384
-  Key Exchange               N/A (TLS 1.3 — key exchange is implicit)
-  Hash Algorithm             N/A (TLS 1.3 — hash is part of cipher suite)
+  TLS Protocol              Tls12
+  Cipher Suite              TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+  Key Exchange              ECDHE (384 bits)
+  Hash Algorithm            SHA-384
 
 ═══ Server Certificate ═══
-  Subject                    CN=myserver.domain.com
-  Issuer                     CN=Enterprise CA, O=Contoso
-  Serial Number              4A00000123456789AB
-  Thumbprint (SHA-1)         A1B2C3D4E5F6...
-  Fingerprint (SHA-256)      1234ABCD5678...
-  Valid From                 2024-01-15 00:00:00 UTC
-  Valid To                   2026-01-15 23:59:59 UTC (640 days remaining)
-  Key Algorithm              RSA (2048 bits)
-  Signature Algorithm        sha256RSA
-  Certificate Version        V3
-  Self-Signed                No
-  Is CA                      No
-  Key Usage                  DigitalSignature, KeyEncipherment
-  Enhanced Key Usage         Server Authentication
-  SANs                       DNS:myserver.domain.com, DNS:myserver
+  Subject                   CN=myserver.corp.example.com, OU=DBA, O=Contoso, S=Ontario, C=CA
+  Issuer                    CN=Contoso Private SSL Int1, O=Contoso Inc., L=Toronto, S=ON, C=CA
+  Serial Number             1F756738BE512E6925712F52FCDE14EF
+  Thumbprint (SHA-1)        7D70F7D229C0D639BF68E0CBB3B1FF02B0491732
+  Fingerprint (SHA-256)     C75C49854AEFC52D7C6C74F7590181824605038AC55A485CA9631D695AC85878
+  Valid From                2025-09-24 14:12:31 UTC
+  Valid To                  2026-09-24 14:12:31 UTC (167 days remaining)
+  Key Algorithm             RSA (4096 bits)
+  Signature Algorithm       sha256RSA
+  Certificate Version       V3
+  Self-Signed               No
+  Is CA                     No
+  Key Usage                 KeyEncipherment, DigitalSignature
+  Enhanced Key Usage        Server Authentication, Client Authentication
+  SANs                      DNS:myserver.corp.example.com, DNS:myserver-ag.corp.example.com
 
-✓ No certificate issues detected.
+[PASS] No certificate issues detected.
+
+═══ DNS Resolution ═══
+  Requested Hostname        myserver.corp.example.com
+  Resolved IPs              10.200.24.228
+  Reverse Lookup            myserver.corp.example.com
+  Forward/Reverse Match     OK
+
+═══ Kerberos SPN Registration ═══
+  Expected SPN (port)       MSSQLSvc/myserver.corp.example.com:22136
+  Expected SPN (base)       MSSQLSvc/myserver.corp.example.com
+  Port SPN                  REGISTERED → svc-sql-prod (User)
+  Base SPN                  NOT FOUND
+
+═══ Kerberos Health Checks ═══
+  [INFO] Port-specific SPN is registered and base SPN is absent. This is the expected
+         configuration for a named instance - a base SPN without a port could conflict
+         with other instances on the same host.
 ```
 
 ## Exit Codes
@@ -125,7 +151,18 @@ Connecting to myserver on TCP port 1433...
 3. Parses the PRELOGIN response (SQL Server version, encryption support)
 4. If encryption is supported, performs a TLS handshake wrapped inside TDS packets
 5. Extracts the server certificate and TLS connection metadata
-6. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
+6. Performs DNS forward/reverse resolution and SPN lookup via LDAP (unless `--skip-kerberos`)
+7. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
+
+For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Versioning
+
+This project uses [MinVer](https://github.com/adamralph/minver) for automatic version derivation from git tags. Version numbers follow the format `v{Major}.{Minor}.{Patch}`:
+
+- **Major** — manually bumped for breaking changes
+- **Minor** — auto-incremented on each PR merge to main
+- **Patch** — set to the merged PR number for traceability
 
 ## License
 
