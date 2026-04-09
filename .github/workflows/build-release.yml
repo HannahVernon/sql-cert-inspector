@@ -52,10 +52,13 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore --runtime win-x64
 
       - name: Build
         run: dotnet build --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test tests/sql-cert-inspector.Tests.csproj --configuration Release --no-restore --verbosity normal
 
       - name: Publish
         run: >
@@ -63,6 +66,7 @@ jobs:
           --configuration Release
           --runtime win-x64
           --self-contained true
+          --no-restore
           --output ./publish/sql-cert-inspector-win-x64
           -p:PublishSingleFile=true
           -p:PublishTrimmed=true
