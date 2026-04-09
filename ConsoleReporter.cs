@@ -89,6 +89,13 @@ public static class ConsoleReporter
                 Console.WriteLine();
             }
         }
+
+        /* Kerberos diagnostics */
+        if (info.Kerberos != null)
+        {
+            Console.WriteLine();
+            ReportKerberos(info.Kerberos);
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -128,25 +135,120 @@ public static class ConsoleReporter
     private static void ReportWarnings(List<CertificateWarning> warnings)
     {
         WriteHeader("Certificate Health Checks");
-        foreach (var warning in warnings)
+        WriteWarningList(warnings);
+    }
+
+    private static void ReportKerberos(KerberosDiagnostics kerberos)
+    {
+        WriteHeader("DNS Resolution");
+        WriteField("Requested Hostname", kerberos.RequestedHostname);
+
+        if (kerberos.DnsError != null)
         {
-            string icon = warning.Severity switch
+            WriteField("DNS Error", kerberos.DnsError);
+        }
+        else
+        {
+            WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
+                ? string.Join(", ", kerberos.ResolvedIpAddresses)
+                : "(none)");
+            WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
+            WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
+
+            if (kerberos.CnameTarget != null)
             {
-                WarningSeverity.Error => "[FAIL]",
-                WarningSeverity.Warning => "[WARN]",
-                WarningSeverity.Info => "[INFO]",
-                _ => "?"
-            };
-            ConsoleColor color = warning.Severity switch
+                WriteField("CNAME Target", kerberos.CnameTarget);
+            }
+        }
+
+        Console.WriteLine();
+        WriteHeader("Kerberos SPN Registration");
+        WriteField("Expected SPN (port)", kerberos.ExpectedSpnWithPort);
+        WriteField("Expected SPN (base)", kerberos.ExpectedSpnWithoutPort);
+
+        if (kerberos.SpnLookupError != null)
+        {
+            WriteField("SPN Lookup Error", kerberos.SpnLookupError);
+        }
+        else
+        {
+            if (kerberos.SpnWithPort != null)
             {
-                WarningSeverity.Error => ConsoleColor.Red,
-                WarningSeverity.Warning => ConsoleColor.Yellow,
-                WarningSeverity.Info => ConsoleColor.Cyan,
-                _ => ConsoleColor.Gray
-            };
-            WriteColored($"  {icon} {warning.Message}", color);
+                ReportSpn(kerberos.SpnWithPort, "Port SPN");
+            }
+            if (kerberos.SpnWithoutPort != null)
+            {
+                ReportSpn(kerberos.SpnWithoutPort, "Base SPN");
+            }
+        }
+
+        if (kerberos.Warnings.Count > 0)
+        {
+            Console.WriteLine();
+            WriteHeader("Kerberos Health Checks");
+            WriteWarningList(kerberos.Warnings);
+        }
+        else
+        {
+            Console.WriteLine();
+            WriteColored("[PASS] No Kerberos issues detected.", ConsoleColor.Green);
             Console.WriteLine();
         }
+    }
+
+    private static void ReportSpn(SpnLookupResult spn, string label)
+    {
+        if (spn.Found)
+        {
+            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
+            WriteColored("REGISTERED", ConsoleColor.Green);
+            string account = spn.AccountName != null
+                ? $" → {spn.AccountName} ({spn.AccountType})"
+                : "";
+            Console.WriteLine(account);
+        }
+        else
+        {
+            WriteColored($"  {label,-25} ", ConsoleColor.DarkGray);
+            WriteColored("NOT FOUND", ConsoleColor.Yellow);
+            Console.WriteLine();
+        }
+    }
+
+    private static void WriteWarningList(IEnumerable<KerberosWarning> warnings)
+    {
+        foreach (var warning in warnings)
+        {
+            WriteWarningLine(warning.Severity, warning.Message);
+        }
+    }
+
+    private static void WriteWarningList(List<CertificateWarning> warnings)
+    {
+        foreach (var warning in warnings)
+        {
+            WriteWarningLine(warning.Severity, warning.Message);
+        }
+    }
+
+    private static void WriteWarningLine(WarningSeverity severity, string message)
+    {
+        string icon = severity switch
+        {
+            WarningSeverity.Error => "[FAIL]",
+            WarningSeverity.Warning => "[WARN]",
+            WarningSeverity.Info => "[INFO]",
+            _ => "?"
+        };
+        ConsoleColor color = severity switch
+        {
+            WarningSeverity.Error => ConsoleColor.Red,
+            WarningSeverity.Warning => ConsoleColor.Yellow,
+            WarningSeverity.Info => ConsoleColor.Cyan,
+            _ => ConsoleColor.Gray
+        };
+        WriteColored($"  {icon} {message}", color);
+        Console.WriteLine();
     }
 
     private static string FormatExpiry(CertificateInfo cert)

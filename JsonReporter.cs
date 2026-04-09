@@ -67,9 +67,42 @@ public static class JsonReporter
             }
         }
 
+        /* Kerberos diagnostics */
+        if (info.Kerberos != null)
+        {
+            output.Kerberos = new KerberosJson
+            {
+                Dns = new DnsJson
+                {
+                    RequestedHostname = info.Kerberos.RequestedHostname,
+                    ResolvedIpAddresses = info.Kerberos.ResolvedIpAddresses.Count > 0 ? info.Kerberos.ResolvedIpAddresses : null,
+                    ReverseHostname = info.Kerberos.ReverseHostname,
+                    ForwardReverseMismatch = info.Kerberos.ForwardReverseMismatch,
+                    CnameTarget = info.Kerberos.CnameTarget,
+                    DnsError = info.Kerberos.DnsError
+                },
+                ExpectedSpnWithPort = info.Kerberos.ExpectedSpnWithPort,
+                ExpectedSpnWithoutPort = info.Kerberos.ExpectedSpnWithoutPort,
+                SpnWithPort = MapSpn(info.Kerberos.SpnWithPort),
+                SpnWithoutPort = MapSpn(info.Kerberos.SpnWithoutPort),
+                SpnLookupError = info.Kerberos.SpnLookupError,
+                Warnings = info.Kerberos.Warnings.Count > 0
+                    ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
+                    : null
+            };
+        }
+
         string json = JsonSerializer.Serialize(output, s_options);
         Console.WriteLine(json);
     }
+
+    private static SpnJson? MapSpn(SpnLookupResult? spn) => spn == null ? null : new SpnJson
+    {
+        Spn = spn.Spn,
+        Found = spn.Found,
+        AccountName = spn.AccountName,
+        AccountType = spn.AccountType
+    };
 
     private static CertificateJson MapCertificate(CertificateInfo cert) => new()
     {
@@ -121,6 +154,7 @@ public static class JsonReporter
         public List<WarningJson>? Warnings { get; set; }
         public List<CertificateJson>? CertificateChain { get; set; }
         public List<string>? ChainValidation { get; set; }
+        public KerberosJson? Kerberos { get; set; }
     }
 
     private sealed class ConnectionJson
@@ -169,5 +203,34 @@ public static class JsonReporter
     {
         public string Severity { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
+    }
+
+    private sealed class KerberosJson
+    {
+        public DnsJson? Dns { get; set; }
+        public string ExpectedSpnWithPort { get; set; } = string.Empty;
+        public string ExpectedSpnWithoutPort { get; set; } = string.Empty;
+        public SpnJson? SpnWithPort { get; set; }
+        public SpnJson? SpnWithoutPort { get; set; }
+        public string? SpnLookupError { get; set; }
+        public List<WarningJson>? Warnings { get; set; }
+    }
+
+    private sealed class DnsJson
+    {
+        public string RequestedHostname { get; set; } = string.Empty;
+        public List<string>? ResolvedIpAddresses { get; set; }
+        public string? ReverseHostname { get; set; }
+        public bool ForwardReverseMismatch { get; set; }
+        public string? CnameTarget { get; set; }
+        public string? DnsError { get; set; }
+    }
+
+    private sealed class SpnJson
+    {
+        public string Spn { get; set; } = string.Empty;
+        public bool Found { get; set; }
+        public string? AccountName { get; set; }
+        public string? AccountType { get; set; }
     }
 }

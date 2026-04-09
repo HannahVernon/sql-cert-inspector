@@ -11,4 +11,5 @@ public sealed class CommandLineOptions
     public bool Json { get; set; }
     public bool ShowFullCertificateChain { get; set; }
     public bool NoColor { get; set; }
+    public bool SkipKerberos { get; set; }
 }

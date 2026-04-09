@@ -33,6 +33,10 @@ var noColorOption = new Option<bool>(
     name: "--no-color",
     description: "Disable colored console output");
 
+var skipKerberosOption = new Option<bool>(
+    name: "--skip-kerberos",
+    description: "Skip Kerberos and DNS diagnostics");
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.")
 {
@@ -41,7 +45,8 @@ var rootCommand = new RootCommand(
     timeoutOption,
     jsonOption,
     chainOption,
-    noColorOption
+    noColorOption,
+    skipKerberosOption
 };
 
 rootCommand.SetHandler(async (InvocationContext context) =>
@@ -53,7 +58,8 @@ rootCommand.SetHandler(async (InvocationContext context) =>
         Timeout = Math.Clamp(context.ParseResult.GetValueForOption(timeoutOption), 1, 120),
         Json = context.ParseResult.GetValueForOption(jsonOption),
         ShowFullCertificateChain = context.ParseResult.GetValueForOption(chainOption),
-        NoColor = context.ParseResult.GetValueForOption(noColorOption)
+        NoColor = context.ParseResult.GetValueForOption(noColorOption),
+        SkipKerberos = context.ParseResult.GetValueForOption(skipKerberosOption)
     };
 
     context.ExitCode = await RunAsync(options);
@@ -125,6 +131,20 @@ static async Task<int> RunAsync(CommandLineOptions options)
     {
         WriteError(options, $"Unexpected error: {ex.Message}");
         return ExitCodes.UnexpectedError;
+    }
+
+    /* Kerberos and DNS diagnostics */
+    if (!options.SkipKerberos && OperatingSystem.IsWindows())
+    {
+        WriteInfo(options, "Running Kerberos and DNS diagnostics...");
+        try
+        {
+            securityInfo.Kerberos = KerberosInspector.Inspect(endpoint.Host, port);
+        }
+        catch (Exception ex)
+        {
+            WriteInfo(options, $"Kerberos diagnostics failed: {ex.Message}");
+        }
     }
 
     /* Report */
