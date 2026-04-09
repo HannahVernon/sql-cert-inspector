@@ -85,7 +85,7 @@ public static class ConsoleReporter
             else
             {
                 Console.WriteLine();
-                WriteColored("✓ No certificate issues detected.", ConsoleColor.Green);
+                WriteColored("[PASS] No certificate issues detected.", ConsoleColor.Green);
                 Console.WriteLine();
             }
         }
@@ -132,9 +132,9 @@ public static class ConsoleReporter
         {
             string icon = warning.Severity switch
             {
-                WarningSeverity.Error => "✗",
-                WarningSeverity.Warning => "⚠",
-                WarningSeverity.Info => "ℹ",
+                WarningSeverity.Error => "[FAIL]",
+                WarningSeverity.Warning => "[WARN]",
+                WarningSeverity.Info => "[INFO]",
                 _ => "?"
             };
             ConsoleColor color = warning.Severity switch
