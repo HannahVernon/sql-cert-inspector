@@ -139,7 +139,7 @@ static async Task<int> RunAsync(CommandLineOptions options)
         WriteInfo(options, "Running Kerberos and DNS diagnostics...");
         try
         {
-            securityInfo.Kerberos = KerberosInspector.Inspect(endpoint.Host, port);
+            securityInfo.Kerberos = KerberosInspector.Inspect(endpoint.Host, port, endpoint.InstanceName != null);
         }
         catch (Exception ex)
         {

@@ -14,7 +14,7 @@ public static class KerberosInspector
 {
     private const string SpnServiceClass = "MSSQLSvc";
 
-    public static KerberosDiagnostics Inspect(string hostname, int port)
+    public static KerberosDiagnostics Inspect(string hostname, int port, bool isNamedInstance)
     {
         var diag = new KerberosDiagnostics
         {
@@ -25,7 +25,7 @@ public static class KerberosInspector
 
         PerformDnsResolution(diag, hostname);
         PerformSpnLookup(diag);
-        RunHealthChecks(diag, port);
+        RunHealthChecks(diag, port, isNamedInstance);
 
         return diag;
     }
@@ -153,7 +153,7 @@ public static class KerberosInspector
             .Replace("\0", "\\00");
     }
 
-    private static void RunHealthChecks(KerberosDiagnostics diag, int port)
+    private static void RunHealthChecks(KerberosDiagnostics diag, int port, bool isNamedInstance)
     {
         /* DNS issues */
         if (diag.DnsError != null)
@@ -193,6 +193,15 @@ public static class KerberosInspector
                 $"No SPN registered for this SQL Server instance. Neither '{diag.ExpectedSpnWithPort}' " +
                 $"nor '{diag.ExpectedSpnWithoutPort}' was found in Active Directory. " +
                 "Kerberos authentication will NOT work — clients will fall back to NTLM."));
+        }
+        else if (portSpnFound && !baseSpnFound && isNamedInstance)
+        {
+            /* Port-specific SPN exists, base SPN does not — this is correct and
+               preferred for named instances to avoid ambiguity with other instances. */
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                $"Port-specific SPN is registered and base SPN is absent. " +
+                "This is the expected configuration for a named instance — " +
+                "a base SPN without a port could conflict with other instances on the same host."));
         }
         else if (!portSpnFound && baseSpnFound && port != 1433)
         {
