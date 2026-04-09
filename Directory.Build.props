@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version derived automatically from git tags by MinVer.
+         Tag format: v{Major}.{Minor}.{Patch}
+         - Major: manually set when tagging (bump for breaking changes)
+         - Minor: auto-incremented by GitHub Actions on each dev->main merge
+         - Patch: set to the merged PR number by GitHub Actions
+         Dev builds between tags get a pre-release suffix (e.g., 1.0.0-alpha.0.5). -->
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <MinVerMinimumMajorMinor>1.0</MinVerMinimumMajorMinor>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,109 @@
+name: Build and Release
+
+on:
+  workflow_run:
+    workflows: ["Version Bump"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find latest version tag
+        id: tag
+        run: |
+          git fetch --tags
+          tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$tag" ]; then
+            echo "::error::No version tag found"
+            exit 1
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building release for $tag (version $version)"
+
+  build:
+    needs: prepare
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Publish
+        run: >
+          dotnet publish sql-cert-inspector.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output ./publish/sql-cert-inspector-win-x64
+          -p:PublishSingleFile=true
+          -p:PublishTrimmed=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+
+      - name: Create zip
+        run: Compress-Archive -Path ./publish/sql-cert-inspector-win-x64/* -DestinationPath ./sql-cert-inspector-win-x64-${{ needs.prepare.outputs.version }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-cert-inspector-win-x64
+          path: ./sql-cert-inspector-win-x64-${{ needs.prepare.outputs.version }}.zip
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: "Release ${{ needs.prepare.outputs.tag }}"
+          body: |
+            ## sql-cert-inspector ${{ needs.prepare.outputs.tag }}
+
+            SQL Server TLS certificate inspector — displays certificate details and connection security metadata without requiring authentication.
+
+            ### Download
+
+            | Platform | File |
+            |----------|------|
+            | Windows x64 | `sql-cert-inspector-win-x64-${{ needs.prepare.outputs.version }}.zip` |
+
+            Self-contained build — no .NET runtime installation required.
+          files: ./artifacts/**/*.zip
+          draft: false
+          prerelease: false

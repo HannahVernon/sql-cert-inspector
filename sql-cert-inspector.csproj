@@ -7,9 +7,6 @@
     <AssemblyName>sql-cert-inspector</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
     <Authors>Hannah Vernon</Authors>
     <Description>SQL Server TLS certificate inspector — displays certificate details and connection security metadata without requiring authentication.</Description>
   </PropertyGroup>
@@ -23,6 +20,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="System.DirectoryServices" Version="10.0.5" />
   </ItemGroup>
