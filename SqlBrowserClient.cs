@@ -36,6 +36,19 @@ public static class SqlBrowserClient
             var remoteEndpoint = new IPEndPoint(IPAddress.Any, 0);
             response = udpClient.Receive(ref remoteEndpoint);
         }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+        {
+            /* A timeout most likely means the Browser service received our request
+               but had no matching instance to respond with. The SQL Browser protocol
+               silently drops requests for unknown instances (no error reply). */
+            throw new SqlBrowserException(
+                $"SQL Server Browser service on {host}:{BrowserPort} (UDP) did not respond " +
+                $"for instance '{instanceName}'. This usually means the instance does not exist on this server.\n\n" +
+                $"If the Browser service is not running, you will also see this timeout.\n\n" +
+                $"To bypass instance resolution, specify the port directly:\n" +
+                $"  sql-cert-inspector --server {host},<port>  OR  --server {host} --port <port>",
+                ex);
+        }
         catch (SocketException ex)
         {
             throw new SqlBrowserException(
@@ -43,7 +56,7 @@ public static class SqlBrowserClient
                 $"The Browser service may not be running, or a firewall may be blocking UDP port {BrowserPort}. " +
                 $"Socket error: {ex.SocketErrorCode} — {ex.Message}\n\n" +
                 $"To bypass instance resolution, specify the port directly:\n" +
-                $"  sql-cert-inspector --server {host},{{}}<port>  OR  --server {host} --port <port>",
+                $"  sql-cert-inspector --server {host},<port>  OR  --server {host} --port <port>",
                 ex);
         }
 
