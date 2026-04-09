@@ -99,8 +99,7 @@ public static class SqlBrowserClient
 
         throw new SqlBrowserException(
             $"SQL Server Browser on {host} responded for instance '{instanceName}', " +
-            $"but no TCP port was found in the response. The instance may not be configured for TCP/IP connections.\n" +
-            $"Browser response: {responseText}");
+            $"but no TCP port was found in the response. The instance may not be configured for TCP/IP connections.");
     }
 }
 
