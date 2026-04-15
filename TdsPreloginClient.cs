@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -41,26 +42,70 @@ public sealed class TdsPreloginClient : IDisposable
             ResolvedPort = port
         };
 
-        /* TCP connect */
-        _tcpClient = new TcpClient();
-        try
+        /* Resolve hostname to IP addresses */
+        IPAddress[] addresses;
+        if (IPAddress.TryParse(host, out var directIp))
         {
-            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            connectCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-            await _tcpClient.ConnectAsync(host, port, connectCts.Token);
+            /* Hostname is already an IP address — skip DNS */
+            addresses = [directIp];
         }
-        catch (OperationCanceledException)
+        else
         {
-            throw new ConnectionException(
-                $"TCP connection to {host}:{port} timed out after {timeoutSeconds} seconds. " +
-                "Verify the server is reachable and the port is correct.");
+            try
+            {
+                addresses = await Dns.GetHostAddressesAsync(host, ct);
+            }
+            catch (SocketException ex)
+            {
+                throw new ConnectionException(
+                    $"DNS resolution for '{host}' failed: {ex.Message}");
+            }
+
+            if (addresses.Length == 0)
+            {
+                throw new ConnectionException(
+                    $"DNS resolution for '{host}' returned no IP addresses.");
+            }
+
+            info.ResolvedIPs = addresses.Select(a => a.ToString()).ToArray();
         }
-        catch (SocketException ex)
+
+        /* TCP connect — parallel race when multiple IPs, direct when single */
+        if (addresses.Length == 1)
         {
-            throw new ConnectionException(
-                $"TCP connection to {host}:{port} failed. " +
-                $"Socket error: {ex.SocketErrorCode} — {ex.Message}\n" +
-                "Verify the server is reachable, the port is correct, and no firewall is blocking the connection.");
+            _tcpClient = new TcpClient();
+            try
+            {
+                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connectCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                await _tcpClient.ConnectAsync(addresses[0], port, connectCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new ConnectionException(
+                    $"TCP connection to {host}:{port} timed out after {timeoutSeconds} seconds. " +
+                    "Verify the server is reachable and the port is correct.");
+            }
+            catch (SocketException ex)
+            {
+                throw new ConnectionException(
+                    $"TCP connection to {host}:{port} failed. " +
+                    $"Socket error: {ex.SocketErrorCode} — {ex.Message}\n" +
+                    "Verify the server is reachable, the port is correct, and no firewall is blocking the connection.");
+            }
+
+            if (info.ResolvedIPs != null)
+            {
+                info.ConnectedIP = addresses[0].ToString();
+            }
+        }
+        else
+        {
+            _tcpClient = await ConnectParallelAsync(addresses, host, port, timeoutSeconds, ct);
+            var connectedAddr = ((IPEndPoint)_tcpClient.Client.RemoteEndPoint!).Address;
+            info.ConnectedIP = connectedAddr.IsIPv4MappedToIPv6
+                ? connectedAddr.MapToIPv4().ToString()
+                : connectedAddr.ToString();
         }
 
         _networkStream = _tcpClient.GetStream();
@@ -145,6 +190,98 @@ public sealed class TdsPreloginClient : IDisposable
         }
 
         return info;
+    }
+
+    /// <summary>
+    /// Races TCP connections to all IP addresses simultaneously.
+    /// Returns the first successful TcpClient; disposes all losers.
+    /// </summary>
+    internal static async Task<TcpClient> ConnectParallelAsync(
+        IPAddress[] addresses, string host, int port, int timeoutSeconds, CancellationToken ct)
+    {
+        using var raceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        raceCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+        var clients = new TcpClient[addresses.Length];
+        var tasks = new Task[addresses.Length];
+
+        for (int i = 0; i < addresses.Length; i++)
+        {
+            clients[i] = new TcpClient();
+            var client = clients[i];
+            var addr = addresses[i];
+            tasks[i] = client.ConnectAsync(addr, port, raceCts.Token).AsTask();
+        }
+
+        /* Find the first successful connection */
+        var errors = new List<Exception>();
+        var remaining = new List<(int index, Task task)>();
+        for (int i = 0; i < tasks.Length; i++)
+        {
+            remaining.Add((i, tasks[i]));
+        }
+
+        TcpClient? winner = null;
+
+        while (remaining.Count > 0 && winner == null)
+        {
+            var completedTask = await Task.WhenAny(remaining.Select(r => r.task));
+
+            var entry = remaining.First(r => r.task == completedTask);
+            remaining.Remove(entry);
+
+            if (completedTask.IsCompletedSuccessfully)
+            {
+                winner = clients[entry.index];
+            }
+            else if (completedTask.Exception != null)
+            {
+                errors.Add(completedTask.Exception.InnerException ?? completedTask.Exception);
+            }
+            else
+            {
+                /* Cancelled */
+                errors.Add(new OperationCanceledException());
+            }
+        }
+
+        /* Cancel and dispose all losers */
+        if (winner != null)
+        {
+            try { await raceCts.CancelAsync(); } catch { /* best effort */ }
+
+            for (int i = 0; i < clients.Length; i++)
+            {
+                if (clients[i] != winner)
+                {
+                    try { clients[i].Dispose(); } catch { /* best effort */ }
+                }
+            }
+
+            return winner;
+        }
+
+        /* All failed — dispose everything and throw aggregate error */
+        for (int i = 0; i < clients.Length; i++)
+        {
+            try { clients[i].Dispose(); } catch { /* best effort */ }
+        }
+
+        var ipList = string.Join(", ", addresses.Select(a => a.ToString()));
+        bool allTimedOut = errors.All(e => e is OperationCanceledException);
+
+        if (allTimedOut)
+        {
+            throw new ConnectionException(
+                $"TCP connection to {host}:{port} timed out after {timeoutSeconds} seconds. " +
+                $"Attempted all resolved IPs ({ipList}) simultaneously — none responded. " +
+                "Verify the server is reachable and the port is correct.");
+        }
+
+        throw new ConnectionException(
+            $"TCP connection to {host}:{port} failed across all resolved IPs ({ipList}). " +
+            $"Errors: {string.Join("; ", errors.Select(e => e.Message))}\n" +
+            "Verify the server is reachable, the port is correct, and no firewall is blocking the connection.");
     }
 
     private static byte[] BuildPreloginPayload()
