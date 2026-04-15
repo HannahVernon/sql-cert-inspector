@@ -146,13 +146,18 @@ Running Kerberos and DNS diagnostics...
 
 ## How it works
 
-1. Opens a TCP connection to the SQL Server port
-2. Sends a TDS PRELOGIN packet requesting encryption
-3. Parses the PRELOGIN response (SQL Server version, encryption support)
-4. If encryption is supported, performs a TLS handshake wrapped inside TDS packets
-5. Extracts the server certificate and TLS connection metadata
-6. Performs DNS forward/reverse resolution and SPN lookup via LDAP (unless `--skip-kerberos`)
-7. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
+1. Resolves the hostname to IP addresses via DNS (skipped when the target is already an IP address)
+2. Opens a TCP connection — if DNS returns multiple IPs, connects to all of them simultaneously and uses whichever responds first (similar to `MultiSubnetFailover=True` in SqlClient)
+3. Sends a TDS PRELOGIN packet requesting encryption
+4. Parses the PRELOGIN response (SQL Server version, encryption support)
+5. If encryption is supported, performs a TLS handshake wrapped inside TDS packets
+6. Extracts the server certificate and TLS connection metadata
+7. Performs DNS forward/reverse resolution and SPN lookup via LDAP (unless `--skip-kerberos`)
+8. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
+
+### Multi-subnet failover
+
+When a hostname (such as an Availability Group listener) resolves to multiple IP addresses, the tool automatically races TCP connections to all IPs in parallel. This avoids the ~21-second sequential timeout that occurs when the first IP is unreachable after a multi-subnet AG failover. The output shows all resolved IPs and which one was used for the connection.
 
 For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

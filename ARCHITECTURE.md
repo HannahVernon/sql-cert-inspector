@@ -52,7 +52,7 @@
 | `SqlBrowserClient.cs` | Queries the SQL Server Browser service on UDP 1434 to resolve a named instance to its TCP port. Distinguishes between timeout (instance not found) and connection failure (service unreachable). |
 | `TdsPacket.cs` | Reads and writes TDS packet headers (8-byte framing: type, status, length, SPID, packet ID, window). |
 | `TdsPreloginStream.cs` | Custom `Stream` implementation that wraps TLS handshake data inside TDS PRELOGIN packets (type 0x12). Required because SQL Server frames TLS records inside TDS during the handshake phase. |
-| `TdsPreloginClient.cs` | Core inspection logic. Opens a TCP connection, sends a TDS PRELOGIN packet, parses the server's response (SQL version, encryption mode), performs a TLS handshake via `SslStream` over `TdsPreloginStream`, and extracts the server certificate and TLS metadata. |
+| `TdsPreloginClient.cs` | Core inspection logic. Resolves hostname to IP addresses via DNS, races TCP connections in parallel when multiple IPs are returned (multi-subnet failover), sends a TDS PRELOGIN packet, parses the server's response (SQL version, encryption mode), performs a TLS handshake via `SslStream` over `TdsPreloginStream`, and extracts the server certificate and TLS metadata. |
 | `CertificateInfo.cs` | Model class holding extracted certificate details, health warnings, and optional chain certificates. |
 | `ConnectionSecurityInfo.cs` | Model class holding connection metadata, TLS properties, the certificate, and Kerberos diagnostics. |
 | `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms). Builds the certificate chain when requested. |
@@ -112,7 +112,9 @@ ServerEndpointResolver.Parse()
   ▼                                                                    ▼
 TdsPreloginClient.InspectAsync(host, port)
   │
-  ├─ TCP connect
+  ├─ DNS resolve hostname → IP address(es)
+  │   └─ Skip if hostname is already an IP address
+  ├─ TCP connect (parallel race if multiple IPs)
   ├─ Send PRELOGIN (request encryption)
   ├─ Parse PRELOGIN response (version, encryption mode)
   ├─ TLS handshake via SslStream + TdsPreloginStream

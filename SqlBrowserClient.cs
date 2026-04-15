@@ -15,6 +15,7 @@ public static class SqlBrowserClient
 
     /// <summary>
     /// Resolves the TCP port for a named SQL Server instance via the Browser service.
+    /// When the hostname resolves to multiple IPs, queries all of them in parallel.
     /// </summary>
     /// <param name="host">The hostname or IP address of the SQL Server.</param>
     /// <param name="instanceName">The instance name to resolve.</param>
@@ -23,6 +24,44 @@ public static class SqlBrowserClient
     /// <exception cref="SqlBrowserException">Thrown when the Browser service is unreachable or the instance is not found.</exception>
     public static int ResolveInstancePort(string host, string instanceName, int timeoutSeconds)
     {
+        /* Resolve hostname to IP addresses for parallel Browser queries */
+        IPAddress[] addresses;
+        if (IPAddress.TryParse(host, out var directIp))
+        {
+            addresses = [directIp];
+        }
+        else
+        {
+            try
+            {
+                addresses = Dns.GetHostAddresses(host);
+            }
+            catch (SocketException ex)
+            {
+                throw new SqlBrowserException(
+                    $"DNS resolution for '{host}' failed: {ex.Message}", ex);
+            }
+
+            if (addresses.Length == 0)
+            {
+                throw new SqlBrowserException(
+                    $"DNS resolution for '{host}' returned no IP addresses.");
+            }
+        }
+
+        if (addresses.Length == 1)
+        {
+            return QueryBrowser(addresses[0], host, instanceName, timeoutSeconds);
+        }
+
+        return QueryBrowserParallel(addresses, host, instanceName, timeoutSeconds);
+    }
+
+    /// <summary>
+    /// Sends a Browser query to a single IP address.
+    /// </summary>
+    private static int QueryBrowser(IPAddress address, string host, string instanceName, int timeoutSeconds)
+    {
         byte[] request = BuildInstanceRequest(instanceName);
         byte[] response;
 
@@ -30,7 +69,7 @@ public static class SqlBrowserClient
         {
             using var udpClient = new UdpClient();
             udpClient.Client.ReceiveTimeout = timeoutSeconds * 1000;
-            udpClient.Connect(host, BrowserPort);
+            udpClient.Connect(address, BrowserPort);
             udpClient.Send(request, request.Length);
 
             var remoteEndpoint = new IPEndPoint(IPAddress.Any, 0);
@@ -38,9 +77,6 @@ public static class SqlBrowserClient
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
         {
-            /* A timeout most likely means the Browser service received our request
-               but had no matching instance to respond with. The SQL Browser protocol
-               silently drops requests for unknown instances (no error reply). */
             throw new SqlBrowserException(
                 $"SQL Server Browser service on {host}:{BrowserPort} (UDP) did not respond " +
                 $"for instance '{instanceName}'. This usually means the instance does not exist on this server.\n\n" +
@@ -61,6 +97,57 @@ public static class SqlBrowserClient
         }
 
         return ParseInstanceResponse(response, host, instanceName);
+    }
+
+    /// <summary>
+    /// Sends Browser queries to all IP addresses in parallel, returns the first valid response.
+    /// </summary>
+    private static int QueryBrowserParallel(IPAddress[] addresses, string host, string instanceName, int timeoutSeconds)
+    {
+        byte[] request = BuildInstanceRequest(instanceName);
+        var tasks = new Task<byte[]?>[addresses.Length];
+
+        for (int i = 0; i < addresses.Length; i++)
+        {
+            var addr = addresses[i];
+            tasks[i] = Task.Run(() =>
+            {
+                try
+                {
+                    using var udpClient = new UdpClient();
+                    udpClient.Client.ReceiveTimeout = timeoutSeconds * 1000;
+                    udpClient.Connect(addr, BrowserPort);
+                    udpClient.Send(request, request.Length);
+
+                    var remoteEndpoint = new IPEndPoint(IPAddress.Any, 0);
+                    return (byte[]?)udpClient.Receive(ref remoteEndpoint);
+                }
+                catch
+                {
+                    return null;
+                }
+            });
+        }
+
+        /* Wait for all to complete (they're bounded by the receive timeout) */
+        Task.WaitAll(tasks);
+
+        /* Use the first successful response */
+        foreach (var task in tasks)
+        {
+            if (task.Result != null)
+            {
+                return ParseInstanceResponse(task.Result, host, instanceName);
+            }
+        }
+
+        var ipList = string.Join(", ", addresses.Select(a => a.ToString()));
+        throw new SqlBrowserException(
+            $"SQL Server Browser service did not respond on any of the resolved IPs ({ipList}) " +
+            $"for instance '{instanceName}' on {host}.\n\n" +
+            $"This usually means the instance does not exist, or the Browser service is not running.\n\n" +
+            $"To bypass instance resolution, specify the port directly:\n" +
+            $"  sql-cert-inspector --server {host},<port>  OR  --server {host} --port <port>");
     }
 
     private static byte[] BuildInstanceRequest(string instanceName)

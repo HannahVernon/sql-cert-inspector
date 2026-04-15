@@ -25,6 +25,8 @@ public static class JsonReporter
                 ServerName = info.ServerName,
                 ResolvedHost = info.ResolvedHost,
                 ResolvedPort = info.ResolvedPort,
+                ResolvedIPs = info.ResolvedIPs,
+                ConnectedIP = info.ConnectedIP,
                 InstanceName = info.InstanceName,
                 SqlServerVersion = info.SqlServerVersion,
                 EncryptionMode = info.EncryptionMode,
@@ -158,6 +160,8 @@ public static class JsonReporter
         public string ServerName { get; set; } = string.Empty;
         public string ResolvedHost { get; set; } = string.Empty;
         public int ResolvedPort { get; set; }
+        public string[]? ResolvedIPs { get; set; }
+        public string? ConnectedIP { get; set; }
         public string? InstanceName { get; set; }
         public string? SqlServerVersion { get; set; }
         public string? EncryptionMode { get; set; }
