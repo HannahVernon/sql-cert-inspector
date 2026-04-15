@@ -157,7 +157,11 @@ Running Kerberos and DNS diagnostics...
 
 ### Multi-subnet failover
 
-When a hostname (such as an Availability Group listener) resolves to multiple IP addresses, the tool automatically races TCP connections to all IPs in parallel. This avoids the ~21-second sequential timeout that occurs when the first IP is unreachable after a multi-subnet AG failover. The output shows all resolved IPs and which one was used for the connection.
+When a hostname (such as an Availability Group listener or a CNAME pointing to one) resolves to multiple IP addresses, the tool automatically races connections to all IPs in parallel — for both SQL Browser UDP queries and TCP connections. This avoids the ~21-second sequential timeout that occurs when the first IP is unreachable after a multi-subnet AG failover.
+
+This mirrors the behavior of `MultiSubnetFailover=True` in Microsoft.Data.SqlClient, but is applied automatically whenever DNS returns multiple IPs — no flag or configuration needed.
+
+The output shows all resolved IPs and which one was used for the connection.
 
 For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

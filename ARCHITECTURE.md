@@ -49,7 +49,7 @@
 | `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--show-full-certificate-chain`, `--skip-kerberos`, `--no-color`). |
 | `ExitCodes.cs` | Constants for process exit codes (0–5). |
 | `ServerEndpointResolver.cs` | Parses the `--server` string into host, instance name, and port components. Validates conflicts between `--port` and port/instance in the server string. |
-| `SqlBrowserClient.cs` | Queries the SQL Server Browser service on UDP 1434 to resolve a named instance to its TCP port. Distinguishes between timeout (instance not found) and connection failure (service unreachable). |
+| `SqlBrowserClient.cs` | Queries the SQL Server Browser service on UDP 1434 to resolve a named instance to its TCP port. When the hostname resolves to multiple IPs, sends Browser queries to all IPs in parallel and uses the first response. Distinguishes between timeout (instance not found) and connection failure (service unreachable). |
 | `TdsPacket.cs` | Reads and writes TDS packet headers (8-byte framing: type, status, length, SPID, packet ID, window). |
 | `TdsPreloginStream.cs` | Custom `Stream` implementation that wraps TLS handshake data inside TDS PRELOGIN packets (type 0x12). Required because SQL Server frames TLS records inside TDS during the handshake phase. |
 | `TdsPreloginClient.cs` | Core inspection logic. Resolves hostname to IP addresses via DNS, races TCP connections in parallel when multiple IPs are returned (multi-subnet failover), sends a TDS PRELOGIN packet, parses the server's response (SQL version, encryption mode), performs a TLS handshake via `SslStream` over `TdsPreloginStream`, and extracts the server certificate and TLS metadata. |
@@ -105,7 +105,11 @@ CLI args
   ▼
 ServerEndpointResolver.Parse()
   │
-  ├─ Named instance? ──► SqlBrowserClient.ResolveInstancePort() ──► TCP port
+  ├─ Named instance? ──► SqlBrowserClient.ResolveInstancePort()
+  │                        │
+  │                        ├─ DNS resolve hostname → IP address(es)
+  │                        ├─ UDP 1434 query (parallel if multiple IPs)
+  │                        └─► TCP port
   │                                                                    │
   ├─ Explicit port? ───────────────────────────────────────────────────┤
   │                                                                    │
