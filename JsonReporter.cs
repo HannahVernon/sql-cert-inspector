@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -15,6 +16,11 @@ public static class JsonReporter
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+
+    private static readonly string s_toolVersion =
+        typeof(JsonReporter).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
 
     /// <summary>
     /// Generates the JSON report string without writing it anywhere.
@@ -34,6 +40,12 @@ public static class JsonReporter
     {
         var output = new JsonOutput
         {
+            Meta = new MetaJson
+            {
+                ToolVersion = s_toolVersion,
+                Timestamp = DateTime.UtcNow,
+                Target = info.ServerName
+            },
             Connection = new ConnectionJson
             {
                 ServerName = info.ServerName,
@@ -45,7 +57,9 @@ public static class JsonReporter
                 InstanceName = info.InstanceName,
                 SqlServerVersion = info.SqlServerVersion,
                 EncryptionMode = info.EncryptionMode,
-                IsEncrypted = info.IsEncrypted
+                IsEncrypted = info.IsEncrypted,
+                TdsProtocol = info.TdsProtocol.ToDisplayString(),
+                UsedFallback = info.UsedFallback ? true : null
             }
         };
 
@@ -162,6 +176,7 @@ public static class JsonReporter
 
     private sealed class JsonOutput
     {
+        public MetaJson Meta { get; set; } = new();
         public ConnectionJson Connection { get; set; } = new();
         public TlsJson? Tls { get; set; }
         public CertificateJson? Certificate { get; set; }
@@ -169,6 +184,13 @@ public static class JsonReporter
         public List<CertificateJson>? CertificateChain { get; set; }
         public List<string>? ChainValidation { get; set; }
         public KerberosJson? Kerberos { get; set; }
+    }
+
+    private sealed class MetaJson
+    {
+        public string ToolVersion { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+        public string Target { get; set; } = string.Empty;
     }
 
     private sealed class ConnectionJson
@@ -183,6 +205,8 @@ public static class JsonReporter
         public string? SqlServerVersion { get; set; }
         public string? EncryptionMode { get; set; }
         public bool IsEncrypted { get; set; }
+        public string? TdsProtocol { get; set; }
+        public bool? UsedFallback { get; set; }
     }
 
     private sealed class TlsJson

@@ -44,6 +44,17 @@ public sealed class ConnectionSecurityInfo
     public bool IsEncrypted { get; set; }
 
     /// <summary>
+    /// The TDS protocol flow used for this connection.
+    /// </summary>
+    public TdsProtocolVersion TdsProtocol { get; set; }
+
+    /// <summary>
+    /// True when the initial protocol attempt failed and the tool retried with the
+    /// alternate protocol. Used to display guidance about --encrypt-strict.
+    /// </summary>
+    public bool UsedFallback { get; set; }
+
+    /// <summary>
     /// The server certificate extracted from the TLS handshake.
     /// </summary>
     public CertificateInfo? Certificate { get; set; }

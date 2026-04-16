@@ -45,6 +45,11 @@ var outputOption = new Option<string?>(
 };
 outputOption.AddAlias("-o");
 
+var encryptStrictOption = new Option<bool>(
+    name: "--encrypt-strict",
+    description: "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)");
+encryptStrictOption.AddAlias("--tds8");
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.")
 {
@@ -55,7 +60,8 @@ var rootCommand = new RootCommand(
     chainOption,
     noColorOption,
     skipKerberosOption,
-    outputOption
+    outputOption,
+    encryptStrictOption
 };
 
 rootCommand.SetHandler(async (InvocationContext context) =>
@@ -71,7 +77,8 @@ rootCommand.SetHandler(async (InvocationContext context) =>
         NoColor = context.ParseResult.GetValueForOption(noColorOption),
         SkipKerberos = context.ParseResult.GetValueForOption(skipKerberosOption),
         OutputFileSpecified = outputSpecified,
-        OutputFile = outputSpecified ? context.ParseResult.GetValueForOption(outputOption) : null
+        OutputFile = outputSpecified ? context.ParseResult.GetValueForOption(outputOption) : null,
+        EncryptStrict = context.ParseResult.GetValueForOption(encryptStrictOption)
     };
 
     context.ExitCode = await RunAsync(options);
@@ -127,11 +134,40 @@ static async Task<int> RunAsync(CommandLineOptions options)
         using var client = new TdsPreloginClient();
         securityInfo = await client.InspectAsync(
             endpoint.Host, port, displayName, options.Timeout,
-            options.ShowFullCertificateChain);
+            options.ShowFullCertificateChain, options.EncryptStrict);
 
         if (endpoint.InstanceName != null)
         {
             securityInfo.InstanceName = endpoint.InstanceName;
+        }
+    }
+    catch (ProtocolMismatchException pmEx)
+    {
+        /* Protocol mismatch — retry with the alternate protocol */
+        bool retryStrict = pmEx.AttemptedProtocol == TdsProtocolVersion.Tds7;
+        string retryProtocol = retryStrict ? "TDS 8.0 (Strict)" : "TDS 7.x";
+
+        WriteInfo(options, $"{pmEx.Message}");
+        WriteInfo(options, $"Retrying with {retryProtocol}...");
+
+        try
+        {
+            using var retryClient = new TdsPreloginClient();
+            securityInfo = await retryClient.InspectAsync(
+                endpoint.Host, port, displayName, options.Timeout,
+                options.ShowFullCertificateChain, retryStrict);
+
+            securityInfo.UsedFallback = true;
+
+            if (endpoint.InstanceName != null)
+            {
+                securityInfo.InstanceName = endpoint.InstanceName;
+            }
+        }
+        catch (ConnectionException retryEx)
+        {
+            WriteError(options, $"Fallback to {retryProtocol} also failed: {retryEx.Message}");
+            return ExitCodes.ConnectionFailure;
         }
     }
     catch (ConnectionException ex)

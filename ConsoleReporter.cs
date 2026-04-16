@@ -38,6 +38,15 @@ public static class ConsoleReporter
             WriteField("SQL Server Version", info.SqlServerVersion);
         }
         WriteField("Encryption Mode", info.EncryptionMode ?? "Unknown");
+        WriteField("TDS Protocol", info.TdsProtocol.ToDisplayString());
+        if (info.UsedFallback)
+        {
+            string guidance = info.TdsProtocol == TdsProtocolVersion.Tds8Strict
+                ? "This server requires strict encryption (TDS 8.0). Use --encrypt-strict to connect directly and avoid a retry."
+                : "This server does not support strict encryption. Omit --encrypt-strict to connect directly.";
+            WriteColored($"  [INFO] {guidance}", ConsoleColor.Cyan);
+            Console.WriteLine();
+        }
         Console.WriteLine();
 
         if (!info.IsEncrypted)
