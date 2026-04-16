@@ -16,6 +16,15 @@ public static class ConsoleReporter
         WriteField("Server", info.ServerName);
         WriteField("Resolved Host", info.ResolvedHost);
         WriteField("Resolved Port", info.ResolvedPort.ToString());
+        if (info.ResolvedIPs is { Length: > 1 })
+        {
+            WriteField("Resolved IPs", string.Join(", ", info.ResolvedIPs));
+            WriteField("Connected via", info.ConnectedIP ?? "Unknown");
+        }
+        else if (info.ResolvedIPs is { Length: 1 })
+        {
+            WriteField("Resolved IP", info.ResolvedIPs[0]);
+        }
         if (info.InstanceName != null)
         {
             WriteField("Instance Name", info.InstanceName);
