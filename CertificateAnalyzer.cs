@@ -12,11 +12,12 @@ public static class CertificateAnalyzer
     private const int MinEccKeySize = 256;
     private const int ExpiryWarningDays = 30;
 
-    public static CertificateInfo Analyze(X509Certificate2 cert, string serverHost, bool showFullChain)
+    public static CertificateInfo Analyze(X509Certificate2 cert, string serverHost, bool showFullChain,
+        string? resolvedFqdn = null)
     {
         var info = ExtractCertDetails(cert);
 
-        RunHealthChecks(info, serverHost);
+        RunHealthChecks(info, serverHost, resolvedFqdn);
 
         if (showFullChain)
         {
@@ -94,7 +95,8 @@ public static class CertificateAnalyzer
         return info;
     }
 
-    internal static void RunHealthChecks(CertificateInfo info, string serverHost)
+    internal static void RunHealthChecks(CertificateInfo info, string serverHost,
+        string? resolvedFqdn = null)
     {
         /* Expired */
         if (info.ValidTo < DateTime.UtcNow)
@@ -122,11 +124,18 @@ public static class CertificateAnalyzer
                 "Certificate is self-signed (Issuer matches Subject)."));
         }
 
-        /* Hostname mismatch */
+        /* Hostname mismatch — check user-supplied hostname first, then resolved FQDN */
         if (!HostnameMatchesCertificate(serverHost, info))
         {
-            info.Warnings.Add(new CertificateWarning(WarningSeverity.Warning,
-                $"Hostname '{serverHost}' does not match the certificate's CN or SANs."));
+            if (resolvedFqdn != null && HostnameMatchesCertificate(resolvedFqdn, info))
+            {
+                /* The resolved FQDN matches — not a real mismatch, just a short name */
+            }
+            else
+            {
+                info.Warnings.Add(new CertificateWarning(WarningSeverity.Warning,
+                    $"Hostname '{serverHost}' does not match the certificate's CN or SANs."));
+            }
         }
 
         /* Weak key size */

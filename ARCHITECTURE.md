@@ -9,7 +9,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         Program.cs                               │
-│                    (Entry point + orchestration)                  │
+│                    (Entry point + orchestration)                 │
 │                                                                  │
 │  1. Parse CLI args (System.CommandLine)                          │
 │  2. Resolve server endpoint                                      │
@@ -49,15 +49,16 @@
 | `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--show-full-certificate-chain`, `--skip-kerberos`, `--no-color`). |
 | `ExitCodes.cs` | Constants for process exit codes (0–5). |
 | `ServerEndpointResolver.cs` | Parses the `--server` string into host, instance name, and port components. Validates conflicts between `--port` and port/instance in the server string. |
+| `DnsResolver.cs` | P/Invoke wrapper for `DnsQuery_W` (`dnsapi.dll`). Queries A, AAAA, and CNAME records and returns structured results with actual DNS record types. Detects DNS suffix expansion (short name → FQDN) vs true CNAME records. Windows-only. |
 | `SqlBrowserClient.cs` | Queries the SQL Server Browser service on UDP 1434 to resolve a named instance to its TCP port. When the hostname resolves to multiple IPs, sends Browser queries to all IPs in parallel and uses the first response. Distinguishes between timeout (instance not found) and connection failure (service unreachable). |
 | `TdsPacket.cs` | Reads and writes TDS packet headers (8-byte framing: type, status, length, SPID, packet ID, window). |
 | `TdsPreloginStream.cs` | Custom `Stream` implementation that wraps TLS handshake data inside TDS PRELOGIN packets (type 0x12). Required because SQL Server frames TLS records inside TDS during the handshake phase. |
 | `TdsPreloginClient.cs` | Core inspection logic. Resolves hostname to IP addresses via DNS, races TCP connections in parallel when multiple IPs are returned (multi-subnet failover), sends a TDS PRELOGIN packet, parses the server's response (SQL version, encryption mode), performs a TLS handshake via `SslStream` over `TdsPreloginStream`, and extracts the server certificate and TLS metadata. |
 | `CertificateInfo.cs` | Model class holding extracted certificate details, health warnings, and optional chain certificates. |
 | `ConnectionSecurityInfo.cs` | Model class holding connection metadata, TLS properties, the certificate, and Kerberos diagnostics. |
-| `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms). Builds the certificate chain when requested. |
-| `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, DNS resolution, warnings). |
-| `KerberosInspector.cs` | Performs DNS forward/reverse lookup, CNAME detection, and SPN lookup via LDAP `DirectorySearcher`. Runs health checks for DNS mismatches, missing SPNs, and duplicate SPN registrations. Windows-only (`[SupportedOSPlatform("windows")]`). |
+| `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms). Accepts an optional resolved FQDN to avoid false hostname mismatch warnings when a short (non-FQDN) name was used. Builds the certificate chain when requested. |
+| `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, DNS resolution, DNS record types, resolved FQDN, warnings). |
+| `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. Runs health checks for DNS mismatches, missing SPNs, and duplicate SPN registrations. Windows-only (`[SupportedOSPlatform("windows")]`). |
 | `ConsoleReporter.cs` | Renders results as colored plain text. Auto-detects redirected output and suppresses colors. Maps raw algorithm enum values to human-readable names. |
 | `JsonReporter.cs` | Renders results as indented JSON via `System.Text.Json`. Applies the same algorithm name mappings as the console reporter. |
 | `Directory.Build.props` | Configures MinVer for automatic version derivation from git tags. |
@@ -126,20 +127,23 @@ TdsPreloginClient.InspectAsync(host, port)
   ├─ Extract TLS metadata (protocol, cipher, key exchange)
   │
   ▼
-CertificateAnalyzer.Analyze(cert, hostname)
+CertificateAnalyzer.Analyze(cert, hostname, resolvedFqdn)
   │
   ├─ Extract all certificate fields
   ├─ Run health checks (expiry, self-signed, hostname, key strength, sig algo)
+  │   └─ Hostname check uses resolved FQDN as fallback when short name doesn't match
   ├─ Optionally build certificate chain
   │
   ▼
 KerberosInspector.Inspect(hostname, port, isNamedInstance)
   │
-  ├─ DNS forward lookup (Dns.GetHostEntry)
+  ├─ DnsResolver.ResolveHost (P/Invoke DnsQuery_W)
+  │   ├─ Query A records (includes CNAME chain if present)
+  │   ├─ Query AAAA records
+  │   └─ Detect suffix expansion vs true CNAME
   ├─ DNS reverse lookup
-  ├─ CNAME detection
-  ├─ SPN lookup via LDAP (MSSQLSvc/host:port and MSSQLSvc/host)
-  ├─ Health checks (missing SPNs, DNS mismatch, duplicate SPNs)
+  ├─ SPN lookup via LDAP (uses resolved FQDN for SPN construction when input is short name)
+  ├─ Health checks (missing SPNs, DNS mismatch, true CNAME warnings, duplicate SPNs)
   │
   ▼
 ConsoleReporter.Report() or JsonReporter.Report()

@@ -27,6 +27,7 @@ public static class JsonReporter
                 ResolvedPort = info.ResolvedPort,
                 ResolvedIPs = info.ResolvedIPs,
                 ConnectedIP = info.ConnectedIP,
+                ResolvedHostname = info.ResolvedHostname,
                 InstanceName = info.InstanceName,
                 SqlServerVersion = info.SqlServerVersion,
                 EncryptionMode = info.EncryptionMode,
@@ -77,6 +78,8 @@ public static class JsonReporter
                 Dns = new DnsJson
                 {
                     RequestedHostname = info.Kerberos.RequestedHostname,
+                    ResolvedFqdn = info.Kerberos.ResolvedFqdn,
+                    DnsRecordTypes = info.Kerberos.DnsRecordTypes.Count > 0 ? info.Kerberos.DnsRecordTypes : null,
                     ResolvedIpAddresses = info.Kerberos.ResolvedIpAddresses.Count > 0 ? info.Kerberos.ResolvedIpAddresses : null,
                     ReverseHostname = info.Kerberos.ReverseHostname,
                     ForwardReverseMismatch = info.Kerberos.ForwardReverseMismatch,
@@ -162,6 +165,7 @@ public static class JsonReporter
         public int ResolvedPort { get; set; }
         public string[]? ResolvedIPs { get; set; }
         public string? ConnectedIP { get; set; }
+        public string? ResolvedHostname { get; set; }
         public string? InstanceName { get; set; }
         public string? SqlServerVersion { get; set; }
         public string? EncryptionMode { get; set; }
@@ -216,6 +220,8 @@ public static class JsonReporter
     private sealed class DnsJson
     {
         public string RequestedHostname { get; set; } = string.Empty;
+        public string? ResolvedFqdn { get; set; }
+        public List<string>? DnsRecordTypes { get; set; }
         public List<string>? ResolvedIpAddresses { get; set; }
         public string? ReverseHostname { get; set; }
         public bool ForwardReverseMismatch { get; set; }

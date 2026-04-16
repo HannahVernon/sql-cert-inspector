@@ -9,7 +9,8 @@ A command-line tool that inspects the TLS certificate and Kerberos configuration
 - **Connection security metadata** — TLS protocol version, cipher suite, SQL Server version, encryption mode
 - **Certificate health checks** — warns about expired certs, expiring soon, self-signed, hostname mismatch, weak keys, deprecated algorithms
 - **Full certificate chain** — optionally display intermediate and root CA certificates
-- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection, SPN account owner identification
+- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification
+- **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, avoiding false mismatch warnings
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
 - **JSON output** — machine-readable output for scripting and automation
 - **Colored console output** — auto-detects redirected output, suppresses colors when piping
@@ -117,6 +118,7 @@ Running Kerberos and DNS diagnostics...
 
 ═══ DNS Resolution ═══
   Requested Hostname        myserver.corp.example.com
+  Record Types              A
   Resolved IPs              10.200.24.228
   Reverse Lookup            myserver.corp.example.com
   Forward/Reverse Match     OK
@@ -152,7 +154,7 @@ Running Kerberos and DNS diagnostics...
 4. Parses the PRELOGIN response (SQL Server version, encryption support)
 5. If encryption is supported, performs a TLS handshake wrapped inside TDS packets
 6. Extracts the server certificate and TLS connection metadata
-7. Performs DNS forward/reverse resolution and SPN lookup via LDAP (unless `--skip-kerberos`)
+7. Performs DNS resolution via `DnsQuery_W` P/Invoke for accurate record type detection (A, AAAA, CNAME), reverse lookup, and SPN lookup via LDAP (unless `--skip-kerberos`)
 8. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
 
 ### Multi-subnet failover

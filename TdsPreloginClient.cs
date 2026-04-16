@@ -51,6 +51,17 @@ public sealed class TdsPreloginClient : IDisposable
         }
         else
         {
+            /* Use DnsResolver for record type info when on Windows */
+            DnsResult? dnsResult = null;
+            if (OperatingSystem.IsWindows())
+            {
+                dnsResult = DnsResolver.ResolveHost(host);
+                if (dnsResult.WasSuffixExpanded && dnsResult.ResolvedFqdn != null)
+                {
+                    info.ResolvedHostname = dnsResult.ResolvedFqdn;
+                }
+            }
+
             try
             {
                 addresses = await Dns.GetHostAddressesAsync(host, ct);
@@ -186,7 +197,7 @@ public sealed class TdsPreloginClient : IDisposable
         if (remoteCert != null)
         {
             var x509 = new X509Certificate2(remoteCert);
-            info.Certificate = CertificateAnalyzer.Analyze(x509, host, showFullChain);
+            info.Certificate = CertificateAnalyzer.Analyze(x509, host, showFullChain, info.ResolvedHostname);
         }
 
         return info;

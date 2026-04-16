@@ -15,6 +15,10 @@ public static class ConsoleReporter
         WriteHeader("Connection Details");
         WriteField("Server", info.ServerName);
         WriteField("Resolved Host", info.ResolvedHost);
+        if (info.ResolvedHostname != null)
+        {
+            WriteField("Resolved FQDN", info.ResolvedHostname);
+        }
         WriteField("Resolved Port", info.ResolvedPort.ToString());
         if (info.ResolvedIPs is { Length: > 1 })
         {
@@ -162,6 +166,16 @@ public static class ConsoleReporter
         }
         else
         {
+            if (kerberos.ResolvedFqdn != null)
+            {
+                WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
+            }
+
+            if (kerberos.DnsRecordTypes.Count > 0)
+            {
+                WriteField("Record Types", string.Join(", ", kerberos.DnsRecordTypes));
+            }
+
             WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
                 ? string.Join(", ", kerberos.ResolvedIpAddresses)
                 : "(none)");
