@@ -18,11 +18,18 @@ public static class KerberosInspector
     {
         var diag = new KerberosDiagnostics
         {
-            RequestedHostname = hostname,
-            ExpectedSpns = BuildExpectedSpns(hostname, port, instanceName)
+            RequestedHostname = hostname
         };
 
-        PerformDnsResolution(diag, hostname);
+        /* Resolve DNS with record type information */
+        var dnsResult = DnsResolver.ResolveHost(hostname);
+        PopulateDnsResults(diag, dnsResult, hostname);
+
+        /* Use the resolved FQDN for SPN construction if input was a short name */
+        string spnHostname = diag.ResolvedFqdn ?? hostname;
+        diag.ExpectedSpns = BuildExpectedSpns(spnHostname, port, instanceName);
+
+        PerformReverseLookup(diag);
         PerformSpnLookup(diag);
 
         bool isNamedInstance = instanceName != null;
@@ -99,47 +106,73 @@ public static class KerberosInspector
         return spns;
     }
 
-    private static void PerformDnsResolution(KerberosDiagnostics diag, string hostname)
+    /// <summary>
+    /// Populates KerberosDiagnostics from a DnsResult (P/Invoke-based resolution).
+    /// </summary>
+    private static void PopulateDnsResults(KerberosDiagnostics diag, DnsResult dnsResult, string hostname)
     {
+        if (dnsResult.Errors.Count > 0)
+        {
+            diag.DnsError = string.Join("; ", dnsResult.Errors);
+        }
+
+        diag.DnsRecordTypes = dnsResult.RecordTypes;
+
+        foreach (var addr in dnsResult.Addresses)
+        {
+            diag.ResolvedIpAddresses.Add(addr);
+        }
+
+        /* True CNAME — the DNS response contained an actual CNAME record */
+        if (dnsResult.CanonicalName != null)
+        {
+            diag.CnameTarget = dnsResult.CanonicalName;
+        }
+
+        /* Suffix expansion — short name resolved via DNS suffix search, no CNAME */
+        if (dnsResult.WasSuffixExpanded && dnsResult.ResolvedFqdn != null)
+        {
+            diag.ResolvedFqdn = dnsResult.ResolvedFqdn;
+        }
+
+        if (dnsResult.Addresses.Count == 0 && dnsResult.Errors.Count == 0)
+        {
+            diag.DnsError = $"DNS resolution returned no addresses for '{hostname}'.";
+        }
+    }
+
+    /// <summary>
+    /// Performs reverse DNS lookup on the first resolved IP address.
+    /// </summary>
+    private static void PerformReverseLookup(KerberosDiagnostics diag)
+    {
+        if (diag.ResolvedIpAddresses.Count == 0 || diag.DnsError != null)
+            return;
+
+        string firstIp = diag.ResolvedIpAddresses[0];
+        if (!IPAddress.TryParse(firstIp, out var ipAddr))
+            return;
+
         try
         {
-            /* Forward lookup */
-            var hostEntry = Dns.GetHostEntry(hostname);
-            foreach (var ip in hostEntry.AddressList)
-            {
-                diag.ResolvedIpAddresses.Add(ip.ToString());
-            }
+            var reverseEntry = Dns.GetHostEntry(ipAddr);
+            diag.ReverseHostname = reverseEntry.HostName;
 
-            /* Check if the resolved hostname differs (CNAME detection) */
-            if (!string.Equals(hostEntry.HostName, hostname, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(hostEntry.HostName, hostname.Split('.')[0], StringComparison.OrdinalIgnoreCase))
-            {
-                diag.CnameTarget = hostEntry.HostName;
-            }
+            /* Check forward/reverse match — compare against requested hostname,
+               resolved FQDN, and CNAME target */
+            string requested = diag.RequestedHostname;
+            string? fqdn = diag.ResolvedFqdn;
+            string? cname = diag.CnameTarget;
 
-            /* Reverse lookup on the first IP */
-            if (hostEntry.AddressList.Length > 0)
-            {
-                try
-                {
-                    var reverseEntry = Dns.GetHostEntry(hostEntry.AddressList[0]);
-                    diag.ReverseHostname = reverseEntry.HostName;
-
-                    /* Check forward/reverse match */
-                    bool matches = string.Equals(reverseEntry.HostName, hostname, StringComparison.OrdinalIgnoreCase) ||
-                                   string.Equals(reverseEntry.HostName, hostEntry.HostName, StringComparison.OrdinalIgnoreCase);
-                    diag.ForwardReverseMismatch = !matches;
-                }
-                catch (SocketException)
-                {
-                    diag.ReverseHostname = "(reverse lookup failed)";
-                    diag.ForwardReverseMismatch = true;
-                }
-            }
+            bool matches = string.Equals(reverseEntry.HostName, requested, StringComparison.OrdinalIgnoreCase) ||
+                           (fqdn != null && string.Equals(reverseEntry.HostName, fqdn, StringComparison.OrdinalIgnoreCase)) ||
+                           (cname != null && string.Equals(reverseEntry.HostName, cname, StringComparison.OrdinalIgnoreCase));
+            diag.ForwardReverseMismatch = !matches;
         }
-        catch (SocketException ex)
+        catch (SocketException)
         {
-            diag.DnsError = $"DNS resolution failed for '{hostname}': {ex.Message}";
+            diag.ReverseHostname = "(reverse lookup failed)";
+            diag.ForwardReverseMismatch = true;
         }
     }
 

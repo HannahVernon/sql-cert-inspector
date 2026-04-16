@@ -22,6 +22,13 @@ public sealed class ConnectionSecurityInfo
     /// </summary>
     public string? ConnectedIP { get; set; }
 
+    /// <summary>
+    /// The fully-qualified domain name resolved from DNS, when the user supplied a
+    /// short (non-FQDN) hostname. Used for certificate matching and SPN construction.
+    /// Null when the input was already an FQDN or an IP address.
+    /// </summary>
+    public string? ResolvedHostname { get; set; }
+
     /* From PRELOGIN response */
     public string? SqlServerVersion { get; set; }
     public string? EncryptionMode { get; set; }

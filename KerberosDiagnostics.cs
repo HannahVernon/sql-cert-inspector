@@ -11,6 +11,8 @@ public sealed class KerberosDiagnostics
     public string? ReverseHostname { get; set; }
     public bool ForwardReverseMismatch { get; set; }
     public string? CnameTarget { get; set; }
+    public string? ResolvedFqdn { get; set; }
+    public List<string> DnsRecordTypes { get; set; } = new();
     public string? DnsError { get; set; }
 
     /* SPN information — all expected variants and their lookup results */
