@@ -41,6 +41,7 @@ sql-cert-inspector --server <server> [options]
 | `--port <port>` | `-p` | TCP port (alternative to `,port` or `\instance` syntax) |
 | `--timeout <seconds>` | `-t` | Connection timeout in seconds (default: 5) |
 | `--json` | | Output in JSON format |
+| `--output [filename]` | `-o` | Write JSON output to a file. If no filename is given, auto-generates from `--server` value. Suppresses console output. |
 | `--show-full-certificate-chain` | | Display the full certificate chain |
 | `--skip-kerberos` | | Skip Kerberos and DNS diagnostics |
 | `--no-color` | | Disable colored console output |
@@ -64,6 +65,15 @@ sql-cert-inspector --server myserver --port 1434
 
 # JSON output for scripting
 sql-cert-inspector --server myserver --json
+
+# Save JSON to a specific file
+sql-cert-inspector --server myserver --output report.json
+
+# Save JSON with auto-generated filename (myserver.json)
+sql-cert-inspector --server myserver --output
+
+# Save JSON for a named instance (myserver-SQLEXPRESS.json)
+sql-cert-inspector --server myserver\SQLEXPRESS -o
 
 # Full certificate chain
 sql-cert-inspector --server myserver --show-full-certificate-chain
@@ -145,6 +155,7 @@ Running Kerberos and DNS diagnostics...
 | `3` | **Browser resolution failure** — could not resolve named instance via SQL Server Browser service |
 | `4` | **Invalid arguments** — bad or conflicting command-line options |
 | `5` | **Unexpected error** — an unhandled exception occurred |
+| `6` | **File write error** — could not write the output file specified by `--output` |
 
 ## How it works
 

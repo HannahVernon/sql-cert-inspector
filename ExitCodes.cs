@@ -22,4 +22,7 @@ public static class ExitCodes
 
     /// <summary>An unexpected error occurred.</summary>
     public const int UnexpectedError = 5;
+
+    /// <summary>Failed to write output file.</summary>
+    public const int FileWriteError = 6;
 }
