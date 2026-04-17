@@ -139,6 +139,81 @@ public class ServerEndpointResolverTests
             () => ServerEndpointResolver.Parse("myserver,0", null));
     }
 
+    /* Localhost alias tests */
+
+    [Fact]
+    public void Parse_Dot_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse(".", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal(1433, result.ExplicitPort);
+    }
+
+    [Fact]
+    public void Parse_DotBackslashInstance_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse(@".\SQLEXPRESS", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal("SQLEXPRESS", result.InstanceName);
+        Assert.True(result.NeedsBrowserLookup);
+    }
+
+    [Fact]
+    public void Parse_DotCommaPort_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse(".,1434", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal(1434, result.ExplicitPort);
+    }
+
+    [Fact]
+    public void Parse_Local_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse("(local)", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal(1433, result.ExplicitPort);
+    }
+
+    [Fact]
+    public void Parse_LocalBackslashInstance_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse(@"(local)\SQLEXPRESS", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal("SQLEXPRESS", result.InstanceName);
+        Assert.True(result.NeedsBrowserLookup);
+    }
+
+    [Fact]
+    public void Parse_LocalCommaPort_TranslatesToLocalhost()
+    {
+        var result = ServerEndpointResolver.Parse("(local),1434", null);
+        Assert.Equal("localhost", result.Host);
+        Assert.Equal(1434, result.ExplicitPort);
+    }
+
+    [Fact]
+    public void Parse_LocalCaseInsensitive()
+    {
+        var result = ServerEndpointResolver.Parse("(LOCAL)", null);
+        Assert.Equal("localhost", result.Host);
+    }
+
+    [Fact]
+    public void Parse_LocalDb_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ServerEndpointResolver.Parse(@"(localdb)\MSSQLLocalDB", null));
+        Assert.Contains("LocalDB", ex.Message);
+        Assert.Contains("shared memory", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_LocalDbCaseInsensitive_Throws()
+    {
+        Assert.Throws<ArgumentException>(
+            () => ServerEndpointResolver.Parse(@"(LOCALDB)\ProjectV15", null));
+    }
+
     [Fact]
     public void Parse_TrimWhitespace()
     {

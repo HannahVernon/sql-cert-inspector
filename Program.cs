@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Reflection;
 using SqlCertInspector;
 
 var serverOption = new Option<string>(
@@ -18,7 +19,7 @@ portOption.AddAlias("-p");
 var timeoutOption = new Option<int>(
     name: "--timeout",
     getDefaultValue: () => 5,
-    description: "Connection timeout in seconds (default: 5)");
+    description: "Connection timeout in seconds");
 timeoutOption.AddAlias("-t");
 
 var jsonOption = new Option<bool>(
@@ -88,6 +89,18 @@ return await rootCommand.InvokeAsync(args);
 
 static async Task<int> RunAsync(CommandLineOptions options)
 {
+    /* Version header for console output */
+    if (!options.Json && !options.OutputFileSpecified)
+    {
+        string version = typeof(ServerEndpointResolver).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+        /* Strip the commit hash after '+' for a cleaner display */
+        int plusIndex = version.IndexOf('+');
+        if (plusIndex >= 0) version = version[..plusIndex];
+        Console.Error.WriteLine($"sql-cert-inspector v{version}, by Hannah Vernon");
+    }
+
     /* Parse the server endpoint */
     ServerEndpointResolver.ResolvedEndpoint endpoint;
     try
