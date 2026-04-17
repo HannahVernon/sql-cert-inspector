@@ -37,6 +37,19 @@ var skipKerberosOption = new Option<bool>(
     name: "--skip-kerberos",
     description: "Skip Kerberos and DNS diagnostics");
 
+var outputOption = new Option<string?>(
+    name: "--output",
+    description: "Write JSON output to a file. If no filename is given, auto-generates from --server value.")
+{
+    Arity = System.CommandLine.ArgumentArity.ZeroOrOne
+};
+outputOption.AddAlias("-o");
+
+var encryptStrictOption = new Option<bool>(
+    name: "--encrypt-strict",
+    description: "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)");
+encryptStrictOption.AddAlias("--tds8");
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.")
 {
@@ -46,11 +59,14 @@ var rootCommand = new RootCommand(
     jsonOption,
     chainOption,
     noColorOption,
-    skipKerberosOption
+    skipKerberosOption,
+    outputOption,
+    encryptStrictOption
 };
 
 rootCommand.SetHandler(async (InvocationContext context) =>
 {
+    bool outputSpecified = context.ParseResult.FindResultFor(outputOption) != null;
     var options = new CommandLineOptions
     {
         Server = context.ParseResult.GetValueForOption(serverOption)!,
@@ -59,7 +75,10 @@ rootCommand.SetHandler(async (InvocationContext context) =>
         Json = context.ParseResult.GetValueForOption(jsonOption),
         ShowFullCertificateChain = context.ParseResult.GetValueForOption(chainOption),
         NoColor = context.ParseResult.GetValueForOption(noColorOption),
-        SkipKerberos = context.ParseResult.GetValueForOption(skipKerberosOption)
+        SkipKerberos = context.ParseResult.GetValueForOption(skipKerberosOption),
+        OutputFileSpecified = outputSpecified,
+        OutputFile = outputSpecified ? context.ParseResult.GetValueForOption(outputOption) : null,
+        EncryptStrict = context.ParseResult.GetValueForOption(encryptStrictOption)
     };
 
     context.ExitCode = await RunAsync(options);
@@ -115,11 +134,40 @@ static async Task<int> RunAsync(CommandLineOptions options)
         using var client = new TdsPreloginClient();
         securityInfo = await client.InspectAsync(
             endpoint.Host, port, displayName, options.Timeout,
-            options.ShowFullCertificateChain);
+            options.ShowFullCertificateChain, options.EncryptStrict);
 
         if (endpoint.InstanceName != null)
         {
             securityInfo.InstanceName = endpoint.InstanceName;
+        }
+    }
+    catch (ProtocolMismatchException pmEx)
+    {
+        /* Protocol mismatch — retry with the alternate protocol */
+        bool retryStrict = pmEx.AttemptedProtocol == TdsProtocolVersion.Tds7;
+        string retryProtocol = retryStrict ? "TDS 8.0 (Strict)" : "TDS 7.x";
+
+        WriteInfo(options, $"{pmEx.Message}");
+        WriteInfo(options, $"Retrying with {retryProtocol}...");
+
+        try
+        {
+            using var retryClient = new TdsPreloginClient();
+            securityInfo = await retryClient.InspectAsync(
+                endpoint.Host, port, displayName, options.Timeout,
+                options.ShowFullCertificateChain, retryStrict);
+
+            securityInfo.UsedFallback = true;
+
+            if (endpoint.InstanceName != null)
+            {
+                securityInfo.InstanceName = endpoint.InstanceName;
+            }
+        }
+        catch (ConnectionException retryEx)
+        {
+            WriteError(options, $"Fallback to {retryProtocol} also failed: {retryEx.Message}");
+            return ExitCodes.ConnectionFailure;
         }
     }
     catch (ConnectionException ex)
@@ -148,14 +196,19 @@ static async Task<int> RunAsync(CommandLineOptions options)
     }
 
     /* Report */
-    if (!options.Json)
+    if (!options.Json && !options.OutputFileSpecified)
     {
         Console.WriteLine();
     }
 
     if (!securityInfo.IsEncrypted)
     {
-        if (options.Json)
+        if (options.OutputFileSpecified)
+        {
+            int writeResult = WriteOutputFile(options, securityInfo);
+            if (writeResult != ExitCodes.Success) return writeResult;
+        }
+        else if (options.Json)
         {
             JsonReporter.Report(securityInfo);
         }
@@ -166,7 +219,12 @@ static async Task<int> RunAsync(CommandLineOptions options)
         return ExitCodes.EncryptionNotEnabled;
     }
 
-    if (options.Json)
+    if (options.OutputFileSpecified)
+    {
+        int writeResult = WriteOutputFile(options, securityInfo);
+        if (writeResult != ExitCodes.Success) return writeResult;
+    }
+    else if (options.Json)
     {
         JsonReporter.Report(securityInfo);
     }
@@ -186,7 +244,7 @@ static async Task<int> RunAsync(CommandLineOptions options)
 
 static void WriteError(CommandLineOptions options, string message)
 {
-    if (options.Json)
+    if (options.Json && !options.OutputFileSpecified)
     {
         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { error = message },
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
@@ -202,12 +260,43 @@ static void WriteError(CommandLineOptions options, string message)
 
 static void WriteInfo(CommandLineOptions options, string message)
 {
-    if (!options.Json)
+    if (!options.Json && !options.OutputFileSpecified)
     {
         bool useColor = !options.NoColor && !Console.IsErrorRedirected;
         if (useColor) Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.Error.WriteLine(message);
         if (useColor) Console.ResetColor();
+    }
+}
+
+/// <summary>
+/// Writes JSON output to a file. Returns an exit code (Success or FileWriteError).
+/// </summary>
+static int WriteOutputFile(CommandLineOptions options, ConnectionSecurityInfo securityInfo)
+{
+    string fileName = options.OutputFile ?? OutputFileHelper.GenerateOutputFileName(options.Server);
+
+    try
+    {
+        string json = JsonReporter.GenerateJson(securityInfo);
+        File.WriteAllText(fileName, json);
+        Console.Error.WriteLine($"Output written to: {fileName}");
+        return ExitCodes.Success;
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        return ExitCodes.FileWriteError;
+    }
+    catch (DirectoryNotFoundException ex)
+    {
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        return ExitCodes.FileWriteError;
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        return ExitCodes.FileWriteError;
     }
 }
 

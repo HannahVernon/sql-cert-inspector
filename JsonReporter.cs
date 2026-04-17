@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -16,10 +17,35 @@ public static class JsonReporter
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    private static readonly string s_toolVersion =
+        typeof(JsonReporter).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+
+    /// <summary>
+    /// Generates the JSON report string without writing it anywhere.
+    /// </summary>
+    public static string GenerateJson(ConnectionSecurityInfo info)
+    {
+        var output = BuildOutput(info);
+        return JsonSerializer.Serialize(output, s_options);
+    }
+
     public static void Report(ConnectionSecurityInfo info)
+    {
+        Console.WriteLine(GenerateJson(info));
+    }
+
+    private static JsonOutput BuildOutput(ConnectionSecurityInfo info)
     {
         var output = new JsonOutput
         {
+            Meta = new MetaJson
+            {
+                ToolVersion = s_toolVersion,
+                Timestamp = DateTime.UtcNow,
+                Target = info.ServerName
+            },
             Connection = new ConnectionJson
             {
                 ServerName = info.ServerName,
@@ -27,10 +53,13 @@ public static class JsonReporter
                 ResolvedPort = info.ResolvedPort,
                 ResolvedIPs = info.ResolvedIPs,
                 ConnectedIP = info.ConnectedIP,
+                ResolvedHostname = info.ResolvedHostname,
                 InstanceName = info.InstanceName,
                 SqlServerVersion = info.SqlServerVersion,
                 EncryptionMode = info.EncryptionMode,
-                IsEncrypted = info.IsEncrypted
+                IsEncrypted = info.IsEncrypted,
+                TdsProtocol = info.TdsProtocol.ToDisplayString(),
+                UsedFallback = info.UsedFallback ? true : null
             }
         };
 
@@ -77,6 +106,8 @@ public static class JsonReporter
                 Dns = new DnsJson
                 {
                     RequestedHostname = info.Kerberos.RequestedHostname,
+                    ResolvedFqdn = info.Kerberos.ResolvedFqdn,
+                    DnsRecordTypes = info.Kerberos.DnsRecordTypes.Count > 0 ? info.Kerberos.DnsRecordTypes : null,
                     ResolvedIpAddresses = info.Kerberos.ResolvedIpAddresses.Count > 0 ? info.Kerberos.ResolvedIpAddresses : null,
                     ReverseHostname = info.Kerberos.ReverseHostname,
                     ForwardReverseMismatch = info.Kerberos.ForwardReverseMismatch,
@@ -98,8 +129,7 @@ public static class JsonReporter
             };
         }
 
-        string json = JsonSerializer.Serialize(output, s_options);
-        Console.WriteLine(json);
+        return output;
     }
 
     private static CertificateJson MapCertificate(CertificateInfo cert) => new()
@@ -146,6 +176,7 @@ public static class JsonReporter
 
     private sealed class JsonOutput
     {
+        public MetaJson Meta { get; set; } = new();
         public ConnectionJson Connection { get; set; } = new();
         public TlsJson? Tls { get; set; }
         public CertificateJson? Certificate { get; set; }
@@ -155,6 +186,13 @@ public static class JsonReporter
         public KerberosJson? Kerberos { get; set; }
     }
 
+    private sealed class MetaJson
+    {
+        public string ToolVersion { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+        public string Target { get; set; } = string.Empty;
+    }
+
     private sealed class ConnectionJson
     {
         public string ServerName { get; set; } = string.Empty;
@@ -162,10 +200,13 @@ public static class JsonReporter
         public int ResolvedPort { get; set; }
         public string[]? ResolvedIPs { get; set; }
         public string? ConnectedIP { get; set; }
+        public string? ResolvedHostname { get; set; }
         public string? InstanceName { get; set; }
         public string? SqlServerVersion { get; set; }
         public string? EncryptionMode { get; set; }
         public bool IsEncrypted { get; set; }
+        public string? TdsProtocol { get; set; }
+        public bool? UsedFallback { get; set; }
     }
 
     private sealed class TlsJson
@@ -216,6 +257,8 @@ public static class JsonReporter
     private sealed class DnsJson
     {
         public string RequestedHostname { get; set; } = string.Empty;
+        public string? ResolvedFqdn { get; set; }
+        public List<string>? DnsRecordTypes { get; set; }
         public List<string>? ResolvedIpAddresses { get; set; }
         public string? ReverseHostname { get; set; }
         public bool ForwardReverseMismatch { get; set; }

@@ -9,10 +9,14 @@ A command-line tool that inspects the TLS certificate and Kerberos configuration
 - **Connection security metadata** — TLS protocol version, cipher suite, SQL Server version, encryption mode
 - **Certificate health checks** — warns about expired certs, expiring soon, self-signed, hostname mismatch, weak keys, deprecated algorithms
 - **Full certificate chain** — optionally display intermediate and root CA certificates
-- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection, SPN account owner identification
+- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification
+- **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, avoiding false mismatch warnings
+- **TDS 8.0 (Strict) support** — connect to servers using strict encryption (`--encrypt-strict` / `--tds8`) where TLS negotiation precedes all TDS traffic; auto-fallback between TDS 7.x and 8.0 with user guidance
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
 - **JSON output** — machine-readable output for scripting and automation
 - **Colored console output** — auto-detects redirected output, suppresses colors when piping
+
+> **Note:** Extended Protection for Authentication (EPA / Channel Binding) is not currently inspected by this tool, as it is negotiated during the LOGIN phase which we never reach. EPA is on our roadmap — see [ARCHITECTURE.md](ARCHITECTURE.md#extended-protection-for-authentication-epa) for technical details and [#15](https://github.com/HannahVernon/sql-cert-inspector/issues/15) for tracking.
 
 ## Installation
 
@@ -40,8 +44,10 @@ sql-cert-inspector --server <server> [options]
 | `--port <port>` | `-p` | TCP port (alternative to `,port` or `\instance` syntax) |
 | `--timeout <seconds>` | `-t` | Connection timeout in seconds (default: 5) |
 | `--json` | | Output in JSON format |
+| `--output [filename]` | `-o` | Write JSON output to a file. If no filename is given, auto-generates from `--server` value. Suppresses console output. |
 | `--show-full-certificate-chain` | | Display the full certificate chain |
 | `--skip-kerberos` | | Skip Kerberos and DNS diagnostics |
+| `--encrypt-strict` | `--tds8` | Use TDS 8.0 strict encryption (TLS before PRELOGIN) |
 | `--no-color` | | Disable colored console output |
 | `--help` | | Show help |
 | `--version` | | Show version |
@@ -64,6 +70,15 @@ sql-cert-inspector --server myserver --port 1434
 # JSON output for scripting
 sql-cert-inspector --server myserver --json
 
+# Save JSON to a specific file
+sql-cert-inspector --server myserver --output report.json
+
+# Save JSON with auto-generated filename (myserver.json)
+sql-cert-inspector --server myserver --output
+
+# Save JSON for a named instance (myserver-SQLEXPRESS.json)
+sql-cert-inspector --server myserver\SQLEXPRESS -o
+
 # Full certificate chain
 sql-cert-inspector --server myserver --show-full-certificate-chain
 
@@ -72,6 +87,9 @@ sql-cert-inspector --server myserver --skip-kerberos
 
 # With custom timeout
 sql-cert-inspector --server myserver --timeout 10
+
+# Connect to a server requiring strict encryption (TDS 8.0)
+sql-cert-inspector --server myserver --encrypt-strict
 ```
 
 ### Sample output
@@ -117,6 +135,7 @@ Running Kerberos and DNS diagnostics...
 
 ═══ DNS Resolution ═══
   Requested Hostname        myserver.corp.example.com
+  Record Types              A
   Resolved IPs              10.200.24.228
   Reverse Lookup            myserver.corp.example.com
   Forward/Reverse Match     OK
@@ -143,8 +162,11 @@ Running Kerberos and DNS diagnostics...
 | `3` | **Browser resolution failure** — could not resolve named instance via SQL Server Browser service |
 | `4` | **Invalid arguments** — bad or conflicting command-line options |
 | `5` | **Unexpected error** — an unhandled exception occurred |
+| `6` | **File write error** — could not write the output file specified by `--output` |
 
 ## How it works
+
+### TDS 7.x (default)
 
 1. Resolves the hostname to IP addresses via DNS (skipped when the target is already an IP address)
 2. Opens a TCP connection — if DNS returns multiple IPs, connects to all of them simultaneously and uses whichever responds first (similar to `MultiSubnetFailover=True` in SqlClient)
@@ -152,8 +174,24 @@ Running Kerberos and DNS diagnostics...
 4. Parses the PRELOGIN response (SQL Server version, encryption support)
 5. If encryption is supported, performs a TLS handshake wrapped inside TDS packets
 6. Extracts the server certificate and TLS connection metadata
-7. Performs DNS forward/reverse resolution and SPN lookup via LDAP (unless `--skip-kerberos`)
+7. Performs DNS resolution via `DnsQuery_W` P/Invoke for accurate record type detection (A, AAAA, CNAME), reverse lookup, and SPN lookup via LDAP (unless `--skip-kerberos`)
 8. Disconnects — no LOGIN packet is ever sent, so no authentication is needed
+
+### TDS 8.0 Strict (`--encrypt-strict`)
+
+1. Resolves hostname and opens TCP connection (same as TDS 7.x)
+2. Performs a standard TLS handshake directly on the TCP socket (like HTTPS — no TDS wrapping)
+3. Extracts the server certificate and TLS connection metadata from the TLS handshake
+4. Sends a TDS PRELOGIN packet *inside* the encrypted tunnel to retrieve SQL Server version
+5. Performs Kerberos/DNS diagnostics (unless `--skip-kerberos`)
+6. Disconnects
+
+### Auto-fallback
+
+If the initial protocol fails with what appears to be a protocol mismatch (e.g., connection reset, unexpected response), the tool automatically retries with the alternate protocol. On success, it displays guidance suggesting the correct option for that server:
+
+- *"This server requires strict encryption (TDS 8.0). Use `--encrypt-strict` to connect directly and avoid a retry."*
+- *"This server does not support strict encryption. Omit `--encrypt-strict` to connect directly."*
 
 ### Multi-subnet failover
 
@@ -164,6 +202,28 @@ This mirrors the behavior of `MultiSubnetFailover=True` in Microsoft.Data.SqlCli
 The output shows all resolved IPs and which one was used for the connection.
 
 For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## TDS Protocol Compatibility
+
+This tool supports both TDS 7.x and TDS 8.0 (Strict) protocol flows.
+
+| SQL Server Version | TDS Version | Supported |
+|---|---|---|
+| SQL Server 2005 | 7.2 | ✅ Yes |
+| SQL Server 2008 / 2008 R2 | 7.3 | ✅ Yes |
+| SQL Server 2012–2019 | 7.4 | ✅ Yes |
+| SQL Server 2022 | 7.4 / 8.0 | ✅ Yes (both modes) |
+| SQL Server 2025 | 7.4 / 8.0 | ✅ Yes (both modes) |
+| Azure SQL Database | 7.4 / 8.0 | ✅ Yes (both modes) |
+
+**TDS 7.x** (default): The PRELOGIN packet is sent in cleartext, then TLS is negotiated inside TDS packet wrappers. This has been the standard flow since SQL Server 2005.
+
+**TDS 8.0 Strict** (`--encrypt-strict`): Introduced in SQL Server 2022, TLS negotiation occurs *before* any TDS packets — like HTTPS. Use `--encrypt-strict` for servers configured with `Encrypt=Strict`.
+
+## References
+
+- [MS-TDS: Tabular Data Stream Protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/b46a581a-39de-4745-b076-ec4dbb7d13ec) — Microsoft's official TDS protocol specification (covers TDS 7.x and 8.0)
+- [TDS 8.0 and Strict Encryption](https://learn.microsoft.com/en-us/sql/relational-databases/security/networking/tds-8?view=sql-server-ver16) — How TDS 8.0 changes the TLS handshake order and its compatibility matrix
 
 ## Versioning
 

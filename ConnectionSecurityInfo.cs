@@ -22,6 +22,13 @@ public sealed class ConnectionSecurityInfo
     /// </summary>
     public string? ConnectedIP { get; set; }
 
+    /// <summary>
+    /// The fully-qualified domain name resolved from DNS, when the user supplied a
+    /// short (non-FQDN) hostname. Used for certificate matching and SPN construction.
+    /// Null when the input was already an FQDN or an IP address.
+    /// </summary>
+    public string? ResolvedHostname { get; set; }
+
     /* From PRELOGIN response */
     public string? SqlServerVersion { get; set; }
     public string? EncryptionMode { get; set; }
@@ -35,6 +42,17 @@ public sealed class ConnectionSecurityInfo
     public int? HashStrength { get; set; }
 
     public bool IsEncrypted { get; set; }
+
+    /// <summary>
+    /// The TDS protocol flow used for this connection.
+    /// </summary>
+    public TdsProtocolVersion TdsProtocol { get; set; }
+
+    /// <summary>
+    /// True when the initial protocol attempt failed and the tool retried with the
+    /// alternate protocol. Used to display guidance about --encrypt-strict.
+    /// </summary>
+    public bool UsedFallback { get; set; }
 
     /// <summary>
     /// The server certificate extracted from the TLS handshake.

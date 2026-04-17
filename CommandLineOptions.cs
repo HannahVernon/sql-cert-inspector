@@ -12,4 +12,15 @@ public sealed class CommandLineOptions
     public bool ShowFullCertificateChain { get; set; }
     public bool NoColor { get; set; }
     public bool SkipKerberos { get; set; }
+
+    /// <summary>
+    /// When true, the --output option was specified on the command line.
+    /// </summary>
+    public bool OutputFileSpecified { get; set; }
+
+    /// <summary>
+    /// Output file path for JSON results. Null when auto-generating from server name.
+    /// </summary>
+    public string? OutputFile { get; set; }
+    public bool EncryptStrict { get; set; }
 }
