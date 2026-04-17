@@ -28,6 +28,9 @@ public static class ServerEndpointResolver
             throw new ArgumentException("Server name cannot be empty.");
         }
 
+        /* Translate SQL Server client conventions for localhost */
+        server = NormalizeLocalhostAliases(server);
+
         var result = new ResolvedEndpoint();
 
         /* Check for comma-separated port: "host,port" */
@@ -95,5 +98,53 @@ public static class ServerEndpointResolver
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Translates SQL Server client conventions for localhost:
+    /// "." and "(local)" become "localhost".
+    /// "(localdb)" prefix throws because LocalDB uses shared memory, not TCP.
+    /// </summary>
+    private static string NormalizeLocalhostAliases(string server)
+    {
+        string trimmed = server.Trim();
+
+        /* Reject LocalDB — it uses shared memory/named pipes, not TCP */
+        if (trimmed.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "LocalDB instances use shared memory, not TCP. " +
+                "sql-cert-inspector requires a TCP connection and cannot connect to LocalDB instances.");
+        }
+
+        /* "." or ".\instance" → "localhost" or "localhost\instance" */
+        if (trimmed == ".")
+        {
+            return "localhost";
+        }
+        if (trimmed.StartsWith(@".\", StringComparison.Ordinal))
+        {
+            return "localhost" + trimmed[1..];
+        }
+        if (trimmed.StartsWith(".,", StringComparison.Ordinal))
+        {
+            return "localhost" + trimmed[1..];
+        }
+
+        /* "(local)" or "(local)\instance" → "localhost" or "localhost\instance" */
+        if (trimmed.Equals("(local)", StringComparison.OrdinalIgnoreCase))
+        {
+            return "localhost";
+        }
+        if (trimmed.StartsWith(@"(local)\", StringComparison.OrdinalIgnoreCase))
+        {
+            return "localhost" + trimmed[7..];
+        }
+        if (trimmed.StartsWith("(local),", StringComparison.OrdinalIgnoreCase))
+        {
+            return "localhost" + trimmed[7..];
+        }
+
+        return trimmed;
     }
 }
