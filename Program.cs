@@ -19,7 +19,7 @@ portOption.AddAlias("-p");
 var timeoutOption = new Option<int>(
     name: "--timeout",
     getDefaultValue: () => 5,
-    description: "Connection timeout in seconds (default: 5)");
+    description: "Connection timeout in seconds");
 timeoutOption.AddAlias("-t");
 
 var jsonOption = new Option<bool>(
