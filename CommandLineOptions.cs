@@ -22,4 +22,5 @@ public sealed class CommandLineOptions
     /// Output file path for JSON results. Null when auto-generating from server name.
     /// </summary>
     public string? OutputFile { get; set; }
+    public bool EncryptStrict { get; set; }
 }

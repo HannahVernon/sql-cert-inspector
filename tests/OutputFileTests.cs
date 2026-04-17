@@ -68,4 +68,27 @@ public class OutputFileTests
         var doc = System.Text.Json.JsonDocument.Parse(json);
         Assert.NotNull(doc);
     }
+
+    [Fact]
+    public void JsonReporter_GenerateJson_IncludesMetaSection()
+    {
+        var info = new ConnectionSecurityInfo
+        {
+            ServerName = "testserver\\INST",
+            ResolvedHost = "testserver.example.com",
+            ResolvedPort = 1433,
+            IsEncrypted = false,
+            EncryptionMode = "OFF"
+        };
+
+        string json = JsonReporter.GenerateJson(info);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.True(root.TryGetProperty("meta", out var meta));
+        Assert.True(meta.TryGetProperty("toolVersion", out var version));
+        Assert.False(string.IsNullOrWhiteSpace(version.GetString()));
+        Assert.True(meta.TryGetProperty("timestamp", out _));
+        Assert.Equal("testserver\\INST", meta.GetProperty("target").GetString());
+    }
 }
