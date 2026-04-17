@@ -102,8 +102,10 @@ public static class DnsResolver
     private static void ParseRecords(IntPtr recordsPtr, DnsResult result)
     {
         IntPtr current = recordsPtr;
+        const int maxRecords = 1000;
+        int recordCount = 0;
 
-        while (current != IntPtr.Zero)
+        while (current != IntPtr.Zero && recordCount < maxRecords)
         {
             var header = Marshal.PtrToStructure<DNS_RECORD_HEADER>(current);
 
@@ -167,6 +169,7 @@ public static class DnsResolver
             }
 
             current = header.pNext;
+            recordCount++;
         }
     }
 

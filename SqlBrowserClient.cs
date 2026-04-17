@@ -169,8 +169,28 @@ public static class SqlBrowserClient
                 $"for instance '{instanceName}'. The instance may not exist on this server.");
         }
 
-        /* Response format: 0x05 (SVR_RESP) + 2-byte length + semicolon-delimited key-value pairs */
-        string responseText = Encoding.ASCII.GetString(response, 3, response.Length - 3);
+        /* Validate response type byte */
+        const byte SvrResp = 0x05;
+        if (response[0] != SvrResp)
+        {
+            throw new SqlBrowserException(
+                $"SQL Server Browser on {host} returned unexpected response type 0x{response[0]:X2} " +
+                $"(expected 0x05) for instance '{instanceName}'.");
+        }
+
+        /* Read declared data length (2-byte little-endian at bytes 1-2) and
+           use the smaller of declared vs actual to avoid reading past valid data */
+        int declaredLength = response[1] | (response[2] << 8);
+        int availableLength = response.Length - 3;
+        int dataLength = Math.Min(declaredLength, availableLength);
+        if (dataLength <= 0)
+        {
+            throw new SqlBrowserException(
+                $"SQL Server Browser on {host} returned an empty data section " +
+                $"for instance '{instanceName}'. The instance may not exist on this server.");
+        }
+
+        string responseText = Encoding.ASCII.GetString(response, 3, dataLength);
         string[] parts = responseText.Split(';');
 
         for (int i = 0; i < parts.Length - 1; i++)
