@@ -46,8 +46,8 @@
 | File | Responsibility |
 |------|----------------|
 | `Program.cs` | Entry point. Parses CLI arguments via `System.CommandLine`, orchestrates the inspection pipeline, handles errors, and delegates to the appropriate reporter. |
-| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--show-full-certificate-chain`, `--skip-kerberos`, `--no-color`). |
-| `ExitCodes.cs` | Constants for process exit codes (0–5). |
+| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--output`, `--show-full-certificate-chain`, `--skip-kerberos`, `--no-color`). |
+| `ExitCodes.cs` | Constants for process exit codes (0–6). |
 | `ServerEndpointResolver.cs` | Parses the `--server` string into host, instance name, and port components. Validates conflicts between `--port` and port/instance in the server string. |
 | `DnsResolver.cs` | P/Invoke wrapper for `DnsQuery_W` (`dnsapi.dll`). Queries A, AAAA, and CNAME records and returns structured results with actual DNS record types. Detects DNS suffix expansion (short name → FQDN) vs true CNAME records. Windows-only. |
 | `SqlBrowserClient.cs` | Queries the SQL Server Browser service on UDP 1434 to resolve a named instance to its TCP port. When the hostname resolves to multiple IPs, sends Browser queries to all IPs in parallel and uses the first response. Distinguishes between timeout (instance not found) and connection failure (service unreachable). |
@@ -60,7 +60,8 @@
 | `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, DNS resolution, DNS record types, resolved FQDN, warnings). |
 | `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. Runs health checks for DNS mismatches, missing SPNs, and duplicate SPN registrations. Windows-only (`[SupportedOSPlatform("windows")]`). |
 | `ConsoleReporter.cs` | Renders results as colored plain text. Auto-detects redirected output and suppresses colors. Maps raw algorithm enum values to human-readable names. |
-| `JsonReporter.cs` | Renders results as indented JSON via `System.Text.Json`. Applies the same algorithm name mappings as the console reporter. |
+| `JsonReporter.cs` | Renders results as indented JSON via `System.Text.Json`. Provides `GenerateJson()` for string output (used by `--output` file writing) and `Report()` for direct console output. Applies the same algorithm name mappings as the console reporter. |
+| `OutputFileHelper.cs` | Generates output filenames from `--server` values by replacing illegal filename characters (`\/:*?"<>\|`) with hyphens. |
 | `Directory.Build.props` | Configures MinVer for automatic version derivation from git tags. |
 
 ## Key Design Decisions

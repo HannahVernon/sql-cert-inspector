@@ -16,7 +16,21 @@ public static class JsonReporter
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Generates the JSON report string without writing it anywhere.
+    /// </summary>
+    public static string GenerateJson(ConnectionSecurityInfo info)
+    {
+        var output = BuildOutput(info);
+        return JsonSerializer.Serialize(output, s_options);
+    }
+
     public static void Report(ConnectionSecurityInfo info)
+    {
+        Console.WriteLine(GenerateJson(info));
+    }
+
+    private static JsonOutput BuildOutput(ConnectionSecurityInfo info)
     {
         var output = new JsonOutput
         {
@@ -101,8 +115,7 @@ public static class JsonReporter
             };
         }
 
-        string json = JsonSerializer.Serialize(output, s_options);
-        Console.WriteLine(json);
+        return output;
     }
 
     private static CertificateJson MapCertificate(CertificateInfo cert) => new()
