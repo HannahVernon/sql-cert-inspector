@@ -68,11 +68,13 @@ The SQL Browser UDP protocol accepts responses from any source IP. An attacker o
 
 No `Process.Start`, shell execution, or process-spawning APIs exist in the codebase. LDAP queries use the `DirectorySearcher` API, not `setspn.exe`. DNS queries use `Dns.GetHostEntry`, not `nslookup`.
 
-### 8. Proper Resource Cleanup
+### 8. Proper Resource Cleanup (Fixed)
 
-**Severity:** None (verified safe)
+**Severity:** High
+**Files:** `TdsPreloginClient.cs`
+**Status:** ✅ Fixed — `SslStream` and `X509Certificate2` now properly disposed.
 
-All disposable resources (`TcpClient`, `UdpClient`, `DirectorySearcher`, `SslStream`) are used within `using` blocks or `IDisposable` patterns. Network stream timeouts are enforced and clamped to 1–120 seconds.
+`SslStream` instances in both TDS 7.x and TDS 8.0 code paths were created without `using` statements, leaking native TLS handles. Additionally, `new X509Certificate2(remoteCert)` in `ExtractCertificate` was never disposed, leaking a certificate handle per invocation. All three resources are now wrapped in `using` statements with `leaveInnerStreamOpen: true` preserved so the underlying network stream remains usable.
 
 ### 9. TDS Packet Size Bounds
 
@@ -80,6 +82,38 @@ All disposable resources (`TcpClient`, `UdpClient`, `DirectorySearcher`, `SslStr
 **File:** `TdsPacket.cs`
 
 Incoming TDS packet payloads are bounded to 65,536 bytes maximum. Combined with stream read timeouts, this prevents unbounded memory allocation from malicious servers.
+
+### 13. PRELOGIN ENCRYPTION Option Missing Length Validation (Fixed)
+
+**Severity:** Critical
+**File:** `TdsPreloginClient.cs`
+**Status:** ✅ Fixed — `enc.length >= 1` guard added.
+
+The PRELOGIN response parser checked that the ENCRYPTION option's offset was within bounds but did not verify the declared length was at least 1 byte. A malicious server could send a zero-length ENCRYPTION option, and while the current code would read at the offset anyway (within bounds), it represented an unvalidated assumption. The parser now requires `enc.length >= 1` and `enc.offset >= 0` before reading the encryption byte.
+
+### 14. Unbounded DNS P/Invoke Linked-List Traversal (Fixed)
+
+**Severity:** High
+**File:** `DnsResolver.cs`
+**Status:** ✅ Fixed — iteration limit of 1,000 records added.
+
+The `ParseRecords()` method followed `pNext` pointers in the `DNS_RECORD` linked list returned by `DnsQuery_W` with no iteration limit. A corrupted or malicious DNS response could create a cycle in the linked list, causing an infinite loop. A `maxRecords = 1000` counter now breaks the loop, which is well above any legitimate DNS response size.
+
+### 15. SQL Browser Response Type and Length Not Validated (Fixed)
+
+**Severity:** High
+**File:** `SqlBrowserClient.cs`
+**Status:** ✅ Fixed — response type byte (0x05) and declared length now validated.
+
+The `ParseInstanceResponse()` method skipped the response type byte (expected `0x05` for SVR_RESP) and the 2-byte length field, converting all bytes after offset 3 to a string regardless. A spoofed or corrupted response with a wrong type byte or inflated length field would be silently accepted. The parser now validates the type byte, reads the declared 2-byte length field, and uses `Math.Min(declaredLength, actualLength)` to bound the string conversion.
+
+### 16. Integer Overflow Risk in PRELOGIN Offset+Length Bounds Check (Fixed)
+
+**Severity:** High
+**File:** `TdsPreloginClient.cs`
+**Status:** ✅ Fixed — bounds checks normalized to subtraction form and `offset >= 0` guards added.
+
+The VERSION option bounds check used `offset + length <= payload.Length`, where `offset` and `length` are 16-bit values stored as `int`. While overflow is unlikely with 16-bit source values, the check has been normalized to `offset <= payload.Length - length` (with `length >= 6` verified first to prevent underflow). Consistent `offset >= 0` guards are now applied to both VERSION and ENCRYPTION options.
 
 ### 10. Dependency Assessment
 
@@ -107,8 +141,8 @@ No hardcoded credentials, API keys, internal server names, or PII exist in the s
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| Critical | 0 | — |
-| High | 1 | ✅ Fixed (IPv4 SPN bug) |
+| Critical | 1 | ✅ Fixed (PRELOGIN ENCRYPTION length validation) |
+| High | 5 | ✅ Fixed (IPv4 SPN, resource disposal, DNS loop, Browser validation, offset overflow) |
 | Medium | 1 | Accepted (UDP protocol limitation) |
 | Low | 2 | ✅ Fixed (Browser response disclosure), Accepted (TLS bypass by design) |
 | Info | 2 | ✅ Fixed (SHA pinning), Noted (beta dependency) |

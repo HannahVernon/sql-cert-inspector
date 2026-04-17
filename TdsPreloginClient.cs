@@ -136,7 +136,7 @@ public sealed class TdsPreloginClient : IDisposable
 
         /* Perform TLS handshake wrapped in TDS PRELOGIN packets */
         var tdsStream = new TdsPreloginStream(_networkStream);
-        var sslStream = new SslStream(
+        using var sslStream = new SslStream(
             tdsStream,
             leaveInnerStreamOpen: true,
             userCertificateValidationCallback: (_, cert, chain, errors) => true /* Accept any cert — we're inspecting, not validating trust */
@@ -183,7 +183,7 @@ public sealed class TdsPreloginClient : IDisposable
         info.IsEncrypted = true;
 
         /* TDS 8.0: TLS handshake directly on the TCP socket (no TDS wrapping) */
-        var sslStream = new SslStream(
+        using var sslStream = new SslStream(
             _networkStream!,
             leaveInnerStreamOpen: true,
             userCertificateValidationCallback: (_, cert, chain, errors) => true
@@ -271,7 +271,7 @@ public sealed class TdsPreloginClient : IDisposable
         var remoteCert = sslStream.RemoteCertificate;
         if (remoteCert != null)
         {
-            var x509 = new X509Certificate2(remoteCert);
+            using var x509 = new X509Certificate2(remoteCert);
             info.Certificate = CertificateAnalyzer.Analyze(x509, host, showFullChain, info.ResolvedHostname);
         }
     }
@@ -520,7 +520,8 @@ public sealed class TdsPreloginClient : IDisposable
         }
 
         /* Parse VERSION */
-        if (options.TryGetValue(TokenVersion, out var ver) && ver.offset + ver.length <= payload.Length && ver.length >= 6)
+        if (options.TryGetValue(TokenVersion, out var ver) && ver.length >= 6 &&
+            ver.offset >= 0 && ver.offset <= payload.Length - ver.length)
         {
             int major = payload[ver.offset];
             int minor = payload[ver.offset + 1];
@@ -532,7 +533,8 @@ public sealed class TdsPreloginClient : IDisposable
         }
 
         /* Parse ENCRYPTION */
-        if (options.TryGetValue(TokenEncryption, out var enc) && enc.offset < payload.Length)
+        if (options.TryGetValue(TokenEncryption, out var enc) && enc.length >= 1 &&
+            enc.offset >= 0 && enc.offset < payload.Length)
         {
             byte encVal = payload[enc.offset];
             info.EncryptionMode = encVal switch
