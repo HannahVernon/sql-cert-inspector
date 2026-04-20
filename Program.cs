@@ -36,7 +36,17 @@ var noColorOption = new Option<bool>("--no-color")
 
 var skipKerberosOption = new Option<bool>("--skip-kerberos")
 {
-    Description = "Skip Kerberos and DNS diagnostics"
+    Description = "Skip Kerberos SPN diagnostics (DNS diagnostics still run)"
+};
+
+var skipDnsOption = new Option<bool>("--skip-dns")
+{
+    Description = "Skip DNS diagnostics (Kerberos SPN lookups still run using the raw hostname)"
+};
+
+var fullSpnDiagnosticsOption = new Option<bool>("--full-spn-diagnostics")
+{
+    Description = "Check all SPN variants including portless base SPNs (normally only port/instance-specific SPNs are checked)"
 };
 
 var outputOption = new Option<string?>("--output", "-o")
@@ -50,18 +60,28 @@ var encryptStrictOption = new Option<bool>("--encrypt-strict", "--tds8")
     Description = "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)"
 };
 
+var testSanConnectivityOption = new Option<bool>("--test-san-connectivity")
+{
+    Description = "Perform a full certificate inspection for each DNS name in the certificate's SANs"
+};
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.");
 
+/* Required */
 rootCommand.Options.Add(serverOption);
-rootCommand.Options.Add(portOption);
-rootCommand.Options.Add(timeoutOption);
-rootCommand.Options.Add(jsonOption);
-rootCommand.Options.Add(chainOption);
-rootCommand.Options.Add(noColorOption);
-rootCommand.Options.Add(skipKerberosOption);
-rootCommand.Options.Add(outputOption);
+/* Optional — alphabetical */
 rootCommand.Options.Add(encryptStrictOption);
+rootCommand.Options.Add(fullSpnDiagnosticsOption);
+rootCommand.Options.Add(jsonOption);
+rootCommand.Options.Add(noColorOption);
+rootCommand.Options.Add(outputOption);
+rootCommand.Options.Add(portOption);
+rootCommand.Options.Add(chainOption);
+rootCommand.Options.Add(skipDnsOption);
+rootCommand.Options.Add(skipKerberosOption);
+rootCommand.Options.Add(testSanConnectivityOption);
+rootCommand.Options.Add(timeoutOption);
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
@@ -75,6 +95,9 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         ShowFullCertificateChain = parseResult.GetValue(chainOption),
         NoColor = parseResult.GetValue(noColorOption),
         SkipKerberos = parseResult.GetValue(skipKerberosOption),
+        SkipDns = parseResult.GetValue(skipDnsOption),
+        FullSpnDiagnostics = parseResult.GetValue(fullSpnDiagnosticsOption),
+        TestSanConnectivity = parseResult.GetValue(testSanConnectivityOption),
         OutputFileSpecified = outputSpecified,
         OutputFile = outputSpecified ? parseResult.GetValue(outputOption) : null,
         EncryptStrict = parseResult.GetValue(encryptStrictOption)
@@ -193,17 +216,58 @@ static async Task<int> RunAsync(CommandLineOptions options)
     }
 
     /* Kerberos and DNS diagnostics */
-    if (!options.SkipKerberos && OperatingSystem.IsWindows())
+    bool runDns = !options.SkipDns;
+    bool runKerberos = !options.SkipKerberos;
+
+    if ((runDns || runKerberos) && OperatingSystem.IsWindows())
     {
-        WriteInfo(options, "Running Kerberos and DNS diagnostics...");
+        string scope = (runDns, runKerberos) switch
+        {
+            (true, true)   => "Kerberos and DNS",
+            (true, false)  => "DNS",
+            (false, true)  => "Kerberos SPN",
+            _              => ""
+        };
+        WriteInfo(options, $"Running {scope} diagnostics...");
         try
         {
-            securityInfo.Kerberos = KerberosInspector.Inspect(endpoint.Host, port, endpoint.InstanceName);
+            securityInfo.Kerberos = KerberosInspector.Inspect(
+                endpoint.Host, port, endpoint.InstanceName,
+                endpoint.IsPortExplicit, options.FullSpnDiagnostics,
+                skipDns: !runDns, skipKerberos: !runKerberos);
         }
         catch (Exception ex)
         {
-            WriteInfo(options, $"Kerberos diagnostics failed: {ex.Message}");
+            WriteInfo(options, $"Diagnostics failed: {ex.Message}");
         }
+    }
+
+    /* Cross-reference certificate SANs with DNS/Kerberos data */
+    if (securityInfo.Certificate != null)
+    {
+        CertificateAnalyzer.CrossReferenceSans(securityInfo.Certificate, securityInfo.Kerberos);
+
+        /* SPN lookup per SAN hostname (--full-spn-diagnostics) */
+        if (options.FullSpnDiagnostics && securityInfo.Kerberos != null && OperatingSystem.IsWindows())
+        {
+            try
+            {
+                KerberosInspector.CrossReferenceSanSpns(
+                    securityInfo.Kerberos, securityInfo.Certificate,
+                    port, endpoint.Host);
+            }
+            catch (Exception ex)
+            {
+                WriteInfo(options, $"SAN SPN cross-reference failed: {ex.Message}");
+            }
+        }
+    }
+
+    /* SAN connectivity tests (--test-san-connectivity) */
+    if (options.TestSanConnectivity && securityInfo.Certificate != null &&
+        securityInfo.Certificate.SubjectAlternativeNames.Count > 0)
+    {
+        await RunSanConnectivityTests(options, securityInfo, endpoint.Host, port);
     }
 
     /* Report */
@@ -311,6 +375,59 @@ static int WriteOutputFile(CommandLineOptions options, ConnectionSecurityInfo se
     {
         Console.Error.WriteLine($"ERROR: Cannot write output file '{Path.GetFileName(canonicalPath)}': {ex.GetType().Name}");
         return ExitCodes.FileWriteError;
+    }
+}
+
+/// <summary>
+/// Runs a full TDS PRELOGIN + TLS inspection for each DNS SAN hostname that differs
+/// from the primary connection hostname. Prevents recursion by not running SAN tests
+/// on sub-inspections.
+/// </summary>
+static async Task RunSanConnectivityTests(
+    CommandLineOptions options, ConnectionSecurityInfo primaryInfo,
+    string primaryHostname, int port)
+{
+    var sanHostnames = primaryInfo.Certificate!.SubjectAlternativeNames
+        .Where(s => s.StartsWith("DNS:", StringComparison.OrdinalIgnoreCase))
+        .Select(s => s[4..])
+        .Where(h => !h.StartsWith("*")) /* skip wildcard SANs */
+        .Where(h => !string.Equals(h, primaryHostname, StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (sanHostnames.Count == 0) return;
+
+    string primaryThumbprint = primaryInfo.Certificate.ThumbprintSha256;
+    primaryInfo.SanConnectivityResults = new List<SanConnectivityResult>();
+
+    WriteInfo(options, $"Testing SAN connectivity for {sanHostnames.Count} hostname(s)...");
+
+    foreach (string sanHost in sanHostnames)
+    {
+        WriteInfo(options, $"  Inspecting {sanHost}:{port}...");
+
+        var result = new SanConnectivityResult { SanHostname = sanHost };
+
+        try
+        {
+            using var client = new TdsPreloginClient();
+            var sanInfo = await client.InspectAsync(
+                sanHost, port, sanHost, options.Timeout,
+                showFullChain: false, options.EncryptStrict);
+
+            result.Connected = true;
+            result.SecurityInfo = sanInfo;
+            result.SameCertificate = sanInfo.Certificate != null &&
+                string.Equals(sanInfo.Certificate.ThumbprintSha256, primaryThumbprint,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            result.Connected = false;
+            result.Error = ex.Message;
+        }
+
+        primaryInfo.SanConnectivityResults.Add(result);
     }
 }
 

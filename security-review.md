@@ -216,12 +216,28 @@ Error messages previously included the full resolved file path, which could reve
 | 08 | Binary Protocol Parsing | ✅ Clean |
 | 09 | TLS Configuration & Certificate Handling | ✅ Clean |
 
+### 23. Unbounded SAN SPN LDAP Lookups (Fixed)
+
+**Severity:** Medium (DoS)
+**File:** `KerberosInspector.cs` — `CrossReferenceSanSpns()`
+**Status:** ✅ Fixed — capped at 50 lookups with info warning when exceeded.
+
+`CrossReferenceSanSpns()` performed one LDAP query per DNS SAN with no cap. A certificate with hundreds of SANs could trigger excessive LDAP queries. A `maxSanLookups = 50` limit now truncates the list with an informational warning.
+
+### 24. setspn Suggestions Not Shell-Escaped (Fixed)
+
+**Severity:** Medium (CWE-77)
+**File:** `KerberosInspector.cs` — `RunHealthChecks()`
+**Status:** ✅ Fixed — SPN values in suggested setspn commands are now single-quote-wrapped.
+
+Suggested `setspn` commands previously embedded the SPN string without shell escaping. A crafted `--server` hostname with backticks or `$()` could inject commands if an admin copy-pastes the suggestion into PowerShell. SPN values are now wrapped in single quotes.
+
 ### Updated Severity Summary
 
 | Severity | Count | Status |
 |----------|-------|--------|
 | Critical | 2 | ✅ Fixed (PRELOGIN length validation, path traversal) |
 | High | 7 | ✅ Fixed (IPv4 SPN, resource disposal, DNS loop, Browser validation, offset overflow, filename sanitization, UDP timeout) |
-| Medium | 3 | ✅ Fixed (System.CommandLine upgrade, path leakage), Accepted (UDP protocol limitation) |
+| Medium | 5 | ✅ Fixed (System.CommandLine upgrade, path leakage, SAN cap, shell escaping), Accepted (UDP protocol limitation) |
 | Low | 3 | ✅ Fixed (Browser response disclosure, LDAP timeouts), Accepted (TLS bypass by design) |
 | Info | 1 | ✅ Fixed (SHA pinning) |

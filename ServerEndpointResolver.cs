@@ -11,6 +11,7 @@ public static class ServerEndpointResolver
         public string Host { get; set; } = string.Empty;
         public string? InstanceName { get; set; }
         public int? ExplicitPort { get; set; }
+        public bool IsPortExplicit { get; set; }
         public bool NeedsBrowserLookup => InstanceName != null && ExplicitPort == null;
     }
 
@@ -57,6 +58,7 @@ public static class ServerEndpointResolver
             }
 
             result.ExplicitPort = port;
+            result.IsPortExplicit = true;
 
             if (portOverride.HasValue)
             {
@@ -90,6 +92,7 @@ public static class ServerEndpointResolver
             /* Plain host — use port override or default 1433 */
             result.Host = server.Trim();
             result.ExplicitPort = portOverride ?? 1433;
+            result.IsPortExplicit = portOverride.HasValue;
         }
 
         if (string.IsNullOrEmpty(result.Host))

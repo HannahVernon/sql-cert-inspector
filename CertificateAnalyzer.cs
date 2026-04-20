@@ -163,6 +163,68 @@ public static class CertificateAnalyzer
             info.Warnings.Add(new CertificateWarning(WarningSeverity.Error,
                 $"Insecure signature algorithm: {info.SignatureAlgorithm}. MD5 is broken."));
         }
+
+        /* No SANs (CN-only certificate) */
+        if (info.SubjectAlternativeNames.Count == 0)
+        {
+            info.Warnings.Add(new CertificateWarning(WarningSeverity.Warning,
+                "Certificate has no Subject Alternative Names (SANs). Modern TLS clients " +
+                "may reject CN-only certificates per RFC 6125."));
+        }
+
+        /* Missing Server Authentication EKU — only warn when EKU extension is present
+           but does not include Server Authentication. Absent EKU is acceptable. */
+        if (info.EnhancedKeyUsage.Count > 0 &&
+            !info.EnhancedKeyUsage.Any(e =>
+                string.Equals(e, "Server Authentication", StringComparison.OrdinalIgnoreCase) ||
+                e == "1.3.6.1.5.5.7.3.1"))
+        {
+            info.Warnings.Add(new CertificateWarning(WarningSeverity.Warning,
+                "Certificate has an Enhanced Key Usage extension but does not include " +
+                "Server Authentication (OID 1.3.6.1.5.5.7.3.1). Some SQL Server drivers " +
+                "may reject this certificate."));
+        }
+    }
+
+    /// <summary>
+    /// Performs cross-reference checks between the certificate's SANs and DNS/Kerberos
+    /// diagnostics. Call after both cert analysis and Kerberos inspection are complete.
+    /// </summary>
+    public static void CrossReferenceSans(CertificateInfo cert, KerberosDiagnostics? kerberos)
+    {
+        if (kerberos == null) return;
+
+        /* CNAME target not in SANs */
+        if (kerberos.CnameTarget != null && cert.SubjectAlternativeNames.Count > 0)
+        {
+            bool cnameInSans = cert.SubjectAlternativeNames.Any(san =>
+            {
+                string sanValue = san.StartsWith("DNS:", StringComparison.OrdinalIgnoreCase) ? san[4..] : san;
+                return MatchesHostname(kerberos.CnameTarget, sanValue);
+            });
+
+            if (!cnameInSans)
+            {
+                cert.Warnings.Add(new CertificateWarning(WarningSeverity.Warning,
+                    $"CNAME target '{kerberos.CnameTarget}' is not listed in the certificate's SANs. " +
+                    "Clients that resolve the CNAME and connect to the canonical name may receive a TLS hostname mismatch error."));
+            }
+        }
+
+        /* Reverse DNS hostname not in SANs */
+        if (kerberos.ReverseHostname != null &&
+            !kerberos.ReverseHostname.StartsWith("(") &&
+            cert.SubjectAlternativeNames.Count > 0)
+        {
+            bool reverseInSans = HostnameMatchesCertificate(kerberos.ReverseHostname, cert);
+
+            if (!reverseInSans)
+            {
+                cert.Warnings.Add(new CertificateWarning(WarningSeverity.Info,
+                    $"Reverse DNS hostname '{kerberos.ReverseHostname}' is not listed in the certificate's SANs. " +
+                    "Clients that perform reverse DNS validation may see a hostname mismatch."));
+            }
+        }
     }
 
     internal static bool HostnameMatchesCertificate(string host, CertificateInfo info)
