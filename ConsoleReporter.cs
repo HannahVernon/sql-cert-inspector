@@ -173,39 +173,51 @@ public static class ConsoleReporter
 
     private static void ReportKerberos(KerberosDiagnostics kerberos)
     {
-        WriteHeader("DNS Resolution");
-        WriteField("Requested Hostname", kerberos.RequestedHostname);
+        bool hasDnsData = kerberos.ResolvedIpAddresses.Count > 0 ||
+                          kerberos.DnsError != null ||
+                          kerberos.DnsRecordTypes.Count > 0;
+        bool hasSpnData = kerberos.ExpectedSpns.Count > 0 ||
+                          kerberos.SpnLookupError != null;
 
-        if (kerberos.DnsError != null)
+        if (hasDnsData)
         {
-            WriteField("DNS Error", kerberos.DnsError);
+            WriteHeader("DNS Resolution");
+            WriteField("Requested Hostname", kerberos.RequestedHostname);
+
+            if (kerberos.DnsError != null)
+            {
+                WriteField("DNS Error", kerberos.DnsError);
+            }
+            else
+            {
+                if (kerberos.ResolvedFqdn != null)
+                {
+                    WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
+                }
+
+                if (kerberos.DnsRecordTypes.Count > 0)
+                {
+                    WriteField("Record Types", string.Join(", ", kerberos.DnsRecordTypes));
+                }
+
+                WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
+                    ? string.Join(", ", kerberos.ResolvedIpAddresses)
+                    : "(none)");
+                WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
+                WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
+
+                if (kerberos.CnameTarget != null)
+                {
+                    WriteField("CNAME Target", kerberos.CnameTarget);
+                }
+            }
+
+            Console.WriteLine();
         }
-        else
+
+        if (hasSpnData)
         {
-            if (kerberos.ResolvedFqdn != null)
-            {
-                WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
-            }
-
-            if (kerberos.DnsRecordTypes.Count > 0)
-            {
-                WriteField("Record Types", string.Join(", ", kerberos.DnsRecordTypes));
-            }
-
-            WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
-                ? string.Join(", ", kerberos.ResolvedIpAddresses)
-                : "(none)");
-            WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
-            WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
-
-            if (kerberos.CnameTarget != null)
-            {
-                WriteField("CNAME Target", kerberos.CnameTarget);
-            }
-        }
-
-        Console.WriteLine();
-        WriteHeader("Kerberos SPN Registration");
+            WriteHeader("Kerberos SPN Registration");
 
         if (kerberos.SpnLookupError != null)
         {
@@ -259,6 +271,7 @@ public static class ConsoleReporter
                 }
             }
         }
+        } /* end if (hasSpnData) */
 
         if (kerberos.Warnings.Count > 0)
         {
@@ -278,10 +291,10 @@ public static class ConsoleReporter
                 }
             }
         }
-        else
+        else if (hasDnsData || hasSpnData)
         {
             Console.WriteLine();
-            WriteColored("[PASS] No Kerberos issues detected.", ConsoleColor.Green);
+            WriteColored("[PASS] No diagnostic issues detected.", ConsoleColor.Green);
             Console.WriteLine();
         }
     }

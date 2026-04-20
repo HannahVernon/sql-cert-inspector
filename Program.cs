@@ -216,18 +216,29 @@ static async Task<int> RunAsync(CommandLineOptions options)
     }
 
     /* Kerberos and DNS diagnostics */
-    if (!options.SkipKerberos && OperatingSystem.IsWindows())
+    bool runDns = !options.SkipDns;
+    bool runKerberos = !options.SkipKerberos;
+
+    if ((runDns || runKerberos) && OperatingSystem.IsWindows())
     {
-        WriteInfo(options, "Running Kerberos and DNS diagnostics...");
+        string scope = (runDns, runKerberos) switch
+        {
+            (true, true)   => "Kerberos and DNS",
+            (true, false)  => "DNS",
+            (false, true)  => "Kerberos SPN",
+            _              => ""
+        };
+        WriteInfo(options, $"Running {scope} diagnostics...");
         try
         {
             securityInfo.Kerberos = KerberosInspector.Inspect(
                 endpoint.Host, port, endpoint.InstanceName,
-                endpoint.IsPortExplicit, options.FullSpnDiagnostics);
+                endpoint.IsPortExplicit, options.FullSpnDiagnostics,
+                skipDns: !runDns, skipKerberos: !runKerberos);
         }
         catch (Exception ex)
         {
-            WriteInfo(options, $"Kerberos diagnostics failed: {ex.Message}");
+            WriteInfo(options, $"Diagnostics failed: {ex.Message}");
         }
     }
 

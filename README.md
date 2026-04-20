@@ -47,7 +47,8 @@ sql-cert-inspector --server <server> [options]
 | `--json` | | Output in JSON format |
 | `--output [filename]` | `-o` | Write JSON output to a file. If no filename is given, auto-generates from `--server` value. Suppresses console output. |
 | `--show-full-certificate-chain` | | Display the full certificate chain |
-| `--skip-kerberos` | | Skip Kerberos and DNS diagnostics |
+| `--skip-kerberos` | | Skip Kerberos SPN diagnostics (DNS diagnostics still run) |
+| `--skip-dns` | | Skip DNS diagnostics (Kerberos SPN lookups still run using raw hostname) |
 | `--full-spn-diagnostics` | | Check all SPN variants including portless base SPNs and SPN coverage for each certificate SAN hostname |
 | `--test-san-connectivity` | | Perform a full certificate inspection for each DNS name in the certificate's SANs |
 | `--encrypt-strict` | `--tds8` | Use TDS 8.0 strict encryption (TLS before PRELOGIN) |
@@ -85,8 +86,11 @@ sql-cert-inspector --server myserver\SQLEXPRESS -o
 # Full certificate chain
 sql-cert-inspector --server myserver --show-full-certificate-chain
 
-# Skip Kerberos diagnostics
+# Skip SPN checks only
 sql-cert-inspector --server myserver --skip-kerberos
+
+# Skip DNS checks only
+sql-cert-inspector --server myserver --skip-dns
 
 # With custom timeout
 sql-cert-inspector --server myserver --timeout 10

@@ -16,24 +16,30 @@ public static class KerberosInspector
 
     public static KerberosDiagnostics Inspect(
         string hostname, int port, string? instanceName,
-        bool isPortExplicit = false, bool fullSpnDiagnostics = false)
+        bool isPortExplicit = false, bool fullSpnDiagnostics = false,
+        bool skipDns = false, bool skipKerberos = false)
     {
         var diag = new KerberosDiagnostics
         {
             RequestedHostname = hostname
         };
 
-        /* Resolve DNS with record type information */
-        var dnsResult = DnsResolver.ResolveHost(hostname);
-        PopulateDnsResults(diag, dnsResult, hostname);
+        /* DNS resolution */
+        if (!skipDns)
+        {
+            var dnsResult = DnsResolver.ResolveHost(hostname);
+            PopulateDnsResults(diag, dnsResult, hostname);
+            PerformReverseLookup(diag);
+        }
 
-        /* Use the resolved FQDN for SPN construction if input was a short name */
-        string spnHostname = diag.ResolvedFqdn ?? hostname;
-        diag.ExpectedSpns = BuildExpectedSpns(
-            spnHostname, port, instanceName, isPortExplicit, fullSpnDiagnostics);
-
-        PerformReverseLookup(diag);
-        PerformSpnLookup(diag);
+        /* SPN construction and lookup */
+        if (!skipKerberos)
+        {
+            string spnHostname = diag.ResolvedFqdn ?? hostname;
+            diag.ExpectedSpns = BuildExpectedSpns(
+                spnHostname, port, instanceName, isPortExplicit, fullSpnDiagnostics);
+            PerformSpnLookup(diag);
+        }
 
         bool isNamedInstance = instanceName != null;
         RunHealthChecks(diag, port, isNamedInstance);
@@ -297,12 +303,14 @@ public static class KerberosInspector
                 "which may cause authentication failures if the SPN is registered under the canonical name."));
         }
 
-        /* SPN issues */
+        /* SPN issues — only check when SPNs were actually looked up */
         if (diag.SpnLookupError != null)
         {
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning, diag.SpnLookupError));
             return;
         }
+
+        if (diag.ExpectedSpns.Count == 0) return;
 
         /* Categorize SPNs: port/instance-specific vs base */
         var specificSpns = diag.ExpectedSpns.Where(s => s.Spn.Contains(':')).ToList();

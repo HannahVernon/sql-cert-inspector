@@ -48,7 +48,7 @@
 | File | Responsibility |
 |------|----------------|
 | `Program.cs` | Entry point. Parses CLI arguments via `System.CommandLine`, orchestrates the inspection pipeline, handles errors, and delegates to the appropriate reporter. |
-| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--output`, `--show-full-certificate-chain`, `--skip-kerberos`, `--encrypt-strict`, `--full-spn-diagnostics`, `--test-san-connectivity`, `--no-color`). |
+| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--output`, `--show-full-certificate-chain`, `--skip-kerberos`, `--skip-dns`, `--encrypt-strict`, `--full-spn-diagnostics`, `--test-san-connectivity`, `--no-color`). |
 | `ExitCodes.cs` | Constants for process exit codes (0–6). |
 | `ServerEndpointResolver.cs` | Parses the `--server` string into host, instance name, and port components. Validates conflicts between `--port` and port/instance in the server string. |
 | `DnsResolver.cs` | P/Invoke wrapper for `DnsQuery_W` (`dnsapi.dll`). Queries A, AAAA, and CNAME records and returns structured results with actual DNS record types. Detects DNS suffix expansion (short name → FQDN) vs true CNAME records. Windows-only. |
