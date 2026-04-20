@@ -87,4 +87,4 @@ This project uses [MinVer](https://github.com/adamralph/minver) for automatic ve
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](licence.md) that covers this project.
+By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE) that covers this project.
