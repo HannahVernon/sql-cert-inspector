@@ -14,23 +14,43 @@ public static class KerberosInspector
 {
     private const string SpnServiceClass = "MSSQLSvc";
 
-    public static KerberosDiagnostics Inspect(string hostname, int port, string? instanceName)
+    public static KerberosDiagnostics Inspect(
+        string hostname, int port, string? instanceName,
+        bool isPortExplicit = false, bool fullSpnDiagnostics = false,
+        bool skipDns = false, bool skipKerberos = false)
     {
         var diag = new KerberosDiagnostics
         {
             RequestedHostname = hostname
         };
 
-        /* Resolve DNS with record type information */
-        var dnsResult = DnsResolver.ResolveHost(hostname);
-        PopulateDnsResults(diag, dnsResult, hostname);
+        /* DNS resolution */
+        if (!skipDns)
+        {
+            var dnsResult = DnsResolver.ResolveHost(hostname);
+            PopulateDnsResults(diag, dnsResult, hostname);
+            PerformReverseLookup(diag);
+        }
 
-        /* Use the resolved FQDN for SPN construction if input was a short name */
-        string spnHostname = diag.ResolvedFqdn ?? hostname;
-        diag.ExpectedSpns = BuildExpectedSpns(spnHostname, port, instanceName);
+        /* SPN construction and lookup */
+        if (!skipKerberos)
+        {
+            string spnHostname = diag.ResolvedFqdn ?? hostname;
+            diag.ExpectedSpns = BuildExpectedSpns(
+                spnHostname, port, instanceName, isPortExplicit, fullSpnDiagnostics);
+            PerformSpnLookup(diag.ExpectedSpns, e => diag.SpnLookupError = e);
 
-        PerformReverseLookup(diag);
-        PerformSpnLookup(diag);
+            /* When a CNAME is detected, also check SPNs for the canonical hostname.
+               Microsoft.Data.SqlClient resolves CNAMEs via Dns.GetHostEntry() before
+               building SPNs, so the canonical name's SPNs are what modern .NET clients
+               actually use. */
+            if (diag.CnameTarget != null)
+            {
+                diag.CnameTargetSpns = BuildExpectedSpns(
+                    diag.CnameTarget, port, instanceName, isPortExplicit, fullSpnDiagnostics);
+                PerformSpnLookup(diag.CnameTargetSpns, _ => { });
+            }
+        }
 
         bool isNamedInstance = instanceName != null;
         RunHealthChecks(diag, port, isNamedInstance);
@@ -42,7 +62,9 @@ public static class KerberosInspector
     /// Builds the list of expected SPN variants for a given SQL Server endpoint.
     /// Visible for unit testing.
     /// </summary>
-    public static List<SpnExpectation> BuildExpectedSpns(string hostname, int port, string? instanceName)
+    public static List<SpnExpectation> BuildExpectedSpns(
+        string hostname, int port, string? instanceName,
+        bool isPortExplicit = false, bool fullSpnDiagnostics = false)
     {
         var spns = new List<SpnExpectation>();
         bool isNamedInstance = instanceName != null;
@@ -52,6 +74,13 @@ public static class KerberosInspector
         string shortName = hostname.Split('.')[0];
         bool hasShortName = !IPAddress.TryParse(hostname, out _) &&
                             !string.Equals(shortName, hostname, StringComparison.OrdinalIgnoreCase);
+
+        /* Base (portless) SPNs are only relevant for non-TCP protocols on default
+           instances. For TCP connections (which this tool uses), the port-based SPN
+           is what SQL Server registers and what clients use. Base SPNs are only
+           included when --full-spn-diagnostics is specified, AND the connection is
+           a default instance with an implicit (non-explicit) port. */
+        bool includeBaseSpns = fullSpnDiagnostics && !isNamedInstance && !isPortExplicit;
 
         /* FQDN + Port — always present */
         spns.Add(new SpnExpectation
@@ -87,20 +116,22 @@ public static class KerberosInspector
             }
         }
 
-        /* Base SPNs (no port/instance — used for default instances) */
-        spns.Add(new SpnExpectation
-        {
-            Label = "FQDN (base)",
-            Spn = $"{SpnServiceClass}/{hostname}"
-        });
-
-        if (hasShortName)
+        if (includeBaseSpns)
         {
             spns.Add(new SpnExpectation
             {
-                Label = "Short (base)",
-                Spn = $"{SpnServiceClass}/{shortName}"
+                Label = "FQDN (base)",
+                Spn = $"{SpnServiceClass}/{hostname}"
             });
+
+            if (hasShortName)
+            {
+                spns.Add(new SpnExpectation
+                {
+                    Label = "Short (base)",
+                    Spn = $"{SpnServiceClass}/{shortName}"
+                });
+            }
         }
 
         return spns;
@@ -176,18 +207,18 @@ public static class KerberosInspector
         }
     }
 
-    private static void PerformSpnLookup(KerberosDiagnostics diag)
+    private static void PerformSpnLookup(List<SpnExpectation> spns, Action<string> onError)
     {
         try
         {
-            foreach (var expected in diag.ExpectedSpns)
+            foreach (var expected in spns)
             {
                 expected.Result = LookupSpn(expected.Spn);
             }
         }
         catch (Exception ex)
         {
-            diag.SpnLookupError = $"LDAP SPN lookup failed: {ex.Message}";
+            onError($"LDAP SPN lookup failed: {ex.Message}");
         }
     }
 
@@ -201,7 +232,9 @@ public static class KerberosInspector
             {
                 Filter = $"(servicePrincipalName={EscapeLdapFilter(spn)})",
                 PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName" },
-                SearchScope = SearchScope.Subtree
+                SearchScope = SearchScope.Subtree,
+                ServerTimeLimit = TimeSpan.FromSeconds(15),
+                ClientTimeout = TimeSpan.FromSeconds(30)
             };
 
             var searchResult = searcher.FindOne();
@@ -275,18 +308,35 @@ public static class KerberosInspector
 
         if (diag.CnameTarget != null)
         {
-            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
-                $"Hostname '{diag.RequestedHostname}' appears to be a CNAME pointing to " +
-                $"'{diag.CnameTarget}'. Kerberos uses the original hostname for SPN construction, " +
-                "which may cause authentication failures if the SPN is registered under the canonical name."));
+            bool cnameSpnFound = diag.CnameTargetSpns != null &&
+                diag.CnameTargetSpns.Any(s => s.Spn.Contains(':') && s.Result?.Found == true);
+
+            if (cnameSpnFound)
+            {
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                    $"Hostname '{diag.RequestedHostname}' is a CNAME pointing to " +
+                    $"'{diag.CnameTarget}'. Microsoft.Data.SqlClient resolves CNAMEs via " +
+                    "Dns.GetHostEntry() before constructing the SPN, so Kerberos will work " +
+                    $"using the canonical name's SPN. However, older client libraries (ODBC, " +
+                    "OLE DB) may attempt to use the connection string hostname directly and fail."));
+            }
+            else
+            {
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                    $"Hostname '{diag.RequestedHostname}' is a CNAME pointing to " +
+                    $"'{diag.CnameTarget}'. No SPN was found for either the requested hostname " +
+                    "or the canonical name. Kerberos authentication will NOT work for any client library."));
+            }
         }
 
-        /* SPN issues */
+        /* SPN issues — only check when SPNs were actually looked up */
         if (diag.SpnLookupError != null)
         {
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning, diag.SpnLookupError));
             return;
         }
+
+        if (diag.ExpectedSpns.Count == 0) return;
 
         /* Categorize SPNs: port/instance-specific vs base */
         var specificSpns = diag.ExpectedSpns.Where(s => s.Spn.Contains(':')).ToList();
@@ -297,18 +347,41 @@ public static class KerberosInspector
 
         if (!anySpecificFound && !anyBaseFound)
         {
-            string allSpns = string.Join(", ", diag.ExpectedSpns.Select(s => $"'{s.Spn}'"));
-            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Error,
-                $"No SPN registered for this SQL Server instance. None of the expected SPNs " +
-                $"({allSpns}) were found in Active Directory. " +
-                "Kerberos authentication will NOT work — clients will fall back to NTLM."));
-        }
-        else if (anySpecificFound && !anyBaseFound && isNamedInstance)
-        {
-            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
-                "Port/instance-specific SPN(s) are registered and base SPN is absent. " +
-                "This is the expected configuration for a named instance — " +
-                "a base SPN without a port could conflict with other instances on the same host."));
+            /* Check if CNAME target SPNs are registered instead */
+            bool cnameSpecificFound = diag.CnameTargetSpns != null &&
+                diag.CnameTargetSpns.Any(s => s.Spn.Contains(':') && s.Result?.Found == true);
+
+            if (cnameSpecificFound)
+            {
+                /* Modern .NET clients (Microsoft.Data.SqlClient) resolve CNAMEs before
+                   building SPNs, so they will find the canonical name's SPN and Kerberos
+                   will work. We already emitted an INFO about this in the CNAME section. */
+                string cnameAccount = diag.CnameTargetSpns!
+                    .Where(s => s.Result?.Found == true)
+                    .Select(s => s.Result!.AccountName)
+                    .FirstOrDefault() ?? "unknown";
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                    $"No SPN registered for the requested hostname '{diag.RequestedHostname}', " +
+                    $"but SPNs exist for the CNAME target '{diag.CnameTarget}' (registered to " +
+                    $"'{cnameAccount}'). Modern .NET clients will authenticate via Kerberos " +
+                    "using the canonical name."));
+            }
+            else
+            {
+                string allSpns = string.Join(", ", diag.ExpectedSpns.Select(s => $"'{s.Spn}'"));
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Error,
+                    $"No SPN registered for this SQL Server instance. None of the expected SPNs " +
+                    $"({allSpns}) were found in Active Directory. " +
+                    "Kerberos authentication will NOT work — clients will fall back to NTLM."));
+
+                /* Only suggest FQDN-based SPNs — short-name SPNs can cause conflicts
+                   in multi-domain environments and should be left to the administrator */
+                foreach (var spn in specificSpns.Where(s =>
+                    s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
+                {
+                    diag.SuggestedSetspnCommands.Add($"setspn -S '{spn.Spn}' <DOMAIN\\ServiceAccount>");
+                }
+            }
         }
         else if (!anySpecificFound && anyBaseFound && port != 1433)
         {
@@ -316,6 +389,12 @@ public static class KerberosInspector
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
                 $"No port/instance-specific SPN found ({missingSpecific}), but a base SPN exists. " +
                 $"Since this instance uses a non-default port ({port}), a port-specific SPN is recommended."));
+
+            foreach (var spn in specificSpns.Where(s =>
+                s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
+            {
+                diag.SuggestedSetspnCommands.Add($"setspn -S '{spn.Spn}' <DOMAIN\\ServiceAccount>");
+            }
         }
 
         /* Check for SPNs registered to different accounts */
@@ -334,6 +413,70 @@ public static class KerberosInspector
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
                 $"SPNs are registered to different accounts: {details}. " +
                 "This may cause unpredictable Kerberos authentication behavior."));
+        }
+
+        /* SAN SPN coverage warnings */
+        if (diag.SanSpnCoverage != null)
+        {
+            var missingSanSpns = diag.SanSpnCoverage.Where(s => !s.Found).ToList();
+            if (missingSanSpns.Count > 0)
+            {
+                foreach (var missing in missingSanSpns)
+                {
+                    diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                        $"SAN hostname '{missing.SanHostname}' has no SPN registered ({missing.Spn}). " +
+                        "Kerberos authentication will fail for clients connecting via this name."));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Performs SPN lookups for each DNS SAN hostname from the certificate that differs
+    /// from the primary connection hostname. Call after both cert and Kerberos inspection complete.
+    /// </summary>
+    public static void CrossReferenceSanSpns(
+        KerberosDiagnostics diag, CertificateInfo cert, int port, string connectionHostname)
+    {
+        if (diag.SpnLookupError != null) return;
+
+        var sanHostnames = cert.SubjectAlternativeNames
+            .Where(s => s.StartsWith("DNS:", StringComparison.OrdinalIgnoreCase))
+            .Select(s => s[4..])
+            .Where(h => !h.StartsWith("*")) /* skip wildcard SANs */
+            .Where(h => !string.Equals(h, connectionHostname, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (sanHostnames.Count == 0) return;
+
+        /* Cap the number of SAN SPN lookups to prevent excessive LDAP queries
+           when a certificate has a very large number of SANs (security audit P5) */
+        const int maxSanLookups = 50;
+        bool capped = sanHostnames.Count > maxSanLookups;
+
+        diag.SanSpnCoverage = new List<SanSpnCheck>();
+
+        foreach (string sanHost in sanHostnames.Take(maxSanLookups))
+        {
+            string spn = $"{SpnServiceClass}/{sanHost}:{port}";
+            var result = LookupSpn(spn);
+
+            diag.SanSpnCoverage.Add(new SanSpnCheck
+            {
+                SanHostname = sanHost,
+                Spn = spn,
+                Found = result.Found,
+                AccountName = result.AccountName,
+                AccountType = result.AccountType
+            });
+        }
+
+        if (capped)
+        {
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                $"Certificate contains {sanHostnames.Count} DNS SANs; only the first " +
+                $"{maxSanLookups} were checked for SPN coverage."));
         }
     }
 }

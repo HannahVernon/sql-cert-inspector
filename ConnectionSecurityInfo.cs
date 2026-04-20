@@ -63,4 +63,30 @@ public sealed class ConnectionSecurityInfo
     /// Kerberos and DNS diagnostic results. Null if skipped.
     /// </summary>
     public KerberosDiagnostics? Kerberos { get; set; }
+
+    /// <summary>
+    /// Results of SAN connectivity tests. Null if --test-san-connectivity was not specified.
+    /// </summary>
+    public List<SanConnectivityResult>? SanConnectivityResults { get; set; }
+}
+
+/// <summary>
+/// Result of a full certificate inspection for one SAN hostname.
+/// </summary>
+public sealed class SanConnectivityResult
+{
+    public string SanHostname { get; set; } = string.Empty;
+    public bool Connected { get; set; }
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Full inspection result for this SAN hostname. Null if connection failed.
+    /// </summary>
+    public ConnectionSecurityInfo? SecurityInfo { get; set; }
+
+    /// <summary>
+    /// True when the certificate served on this SAN matches the primary certificate
+    /// (same SHA-256 thumbprint).
+    /// </summary>
+    public bool SameCertificate { get; set; }
 }

@@ -129,8 +129,11 @@ public static class SqlBrowserClient
             });
         }
 
-        /* Wait for all to complete (they're bounded by the receive timeout) */
-        Task.WaitAll(tasks);
+        /* Wait for all tasks with an explicit timeout as a safety net.
+           Individual tasks are bounded by ReceiveTimeout, but we add a ceiling
+           to guard against platform-level hangs (security audit P2). */
+        int waitMilliseconds = Math.Clamp((timeoutSeconds + 5) * 1000, 5000, 125000);
+        Task.WaitAll(tasks, waitMilliseconds);
 
         /* Use the first successful response */
         foreach (var task in tasks)

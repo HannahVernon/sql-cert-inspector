@@ -266,6 +266,270 @@ public class CertificateAnalyzerTests
     }
 
     [Fact]
+    public void HealthCheck_NoSans_WarnsAboutCnOnly()
+    {
+        var info = new CertificateInfo
+        {
+            Subject = "CN=cnonly.example.com",
+            Issuer = "CN=CA Root, O=Contoso",
+            ValidFrom = DateTime.UtcNow.AddYears(-1),
+            ValidTo = DateTime.UtcNow.AddYears(1),
+            DaysUntilExpiry = 365,
+            KeyAlgorithm = "RSA",
+            KeySizeBits = 2048,
+            SignatureAlgorithm = "sha256RSA"
+        };
+
+        CertificateAnalyzer.RunHealthChecks(info, "cnonly.example.com");
+
+        Assert.Contains(info.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("no Subject Alternative Names"));
+    }
+
+    [Fact]
+    public void HealthCheck_WithSans_NoCnOnlyWarning()
+    {
+        var info = new CertificateInfo
+        {
+            Subject = "CN=withsans.example.com",
+            Issuer = "CN=CA Root, O=Contoso",
+            ValidFrom = DateTime.UtcNow.AddYears(-1),
+            ValidTo = DateTime.UtcNow.AddYears(1),
+            DaysUntilExpiry = 365,
+            KeyAlgorithm = "RSA",
+            KeySizeBits = 2048,
+            SignatureAlgorithm = "sha256RSA",
+            SubjectAlternativeNames = new List<string> { "DNS:withsans.example.com" }
+        };
+
+        CertificateAnalyzer.RunHealthChecks(info, "withsans.example.com");
+
+        Assert.DoesNotContain(info.Warnings, w =>
+            w.Message.Contains("no Subject Alternative Names"));
+    }
+
+    [Fact]
+    public void HealthCheck_MissingServerAuthEku_Warns()
+    {
+        var info = new CertificateInfo
+        {
+            Subject = "CN=noserverauth.example.com",
+            Issuer = "CN=CA Root, O=Contoso",
+            ValidFrom = DateTime.UtcNow.AddYears(-1),
+            ValidTo = DateTime.UtcNow.AddYears(1),
+            DaysUntilExpiry = 365,
+            KeyAlgorithm = "RSA",
+            KeySizeBits = 2048,
+            SignatureAlgorithm = "sha256RSA",
+            SubjectAlternativeNames = new List<string> { "DNS:noserverauth.example.com" },
+            EnhancedKeyUsage = new List<string> { "Client Authentication" }
+        };
+
+        CertificateAnalyzer.RunHealthChecks(info, "noserverauth.example.com");
+
+        Assert.Contains(info.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("Server Authentication"));
+    }
+
+    [Fact]
+    public void HealthCheck_HasServerAuthEku_NoWarning()
+    {
+        var info = new CertificateInfo
+        {
+            Subject = "CN=serverauth.example.com",
+            Issuer = "CN=CA Root, O=Contoso",
+            ValidFrom = DateTime.UtcNow.AddYears(-1),
+            ValidTo = DateTime.UtcNow.AddYears(1),
+            DaysUntilExpiry = 365,
+            KeyAlgorithm = "RSA",
+            KeySizeBits = 2048,
+            SignatureAlgorithm = "sha256RSA",
+            SubjectAlternativeNames = new List<string> { "DNS:serverauth.example.com" },
+            EnhancedKeyUsage = new List<string> { "Server Authentication", "Client Authentication" }
+        };
+
+        CertificateAnalyzer.RunHealthChecks(info, "serverauth.example.com");
+
+        Assert.DoesNotContain(info.Warnings, w =>
+            w.Message.Contains("Server Authentication"));
+    }
+
+    [Fact]
+    public void HealthCheck_NoEku_NoWarning()
+    {
+        var info = new CertificateInfo
+        {
+            Subject = "CN=noeku.example.com",
+            Issuer = "CN=CA Root, O=Contoso",
+            ValidFrom = DateTime.UtcNow.AddYears(-1),
+            ValidTo = DateTime.UtcNow.AddYears(1),
+            DaysUntilExpiry = 365,
+            KeyAlgorithm = "RSA",
+            KeySizeBits = 2048,
+            SignatureAlgorithm = "sha256RSA",
+            SubjectAlternativeNames = new List<string> { "DNS:noeku.example.com" }
+        };
+
+        CertificateAnalyzer.RunHealthChecks(info, "noeku.example.com");
+
+        Assert.DoesNotContain(info.Warnings, w =>
+            w.Message.Contains("Server Authentication"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_CnameNotInSans_Warns()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:primary.example.com",
+                "DNS:alias.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            CnameTarget = "canonical.example.com"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.Contains(cert.Warnings, w =>
+            w.Severity == WarningSeverity.Warning &&
+            w.Message.Contains("CNAME target") &&
+            w.Message.Contains("canonical.example.com"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_CnameInSans_NoWarning()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:primary.example.com",
+                "DNS:canonical.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            CnameTarget = "canonical.example.com"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.DoesNotContain(cert.Warnings, w =>
+            w.Message.Contains("CNAME target"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_ReverseNotInSans_InfoWarning()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:primary.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            ReverseHostname = "different.example.com"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.Contains(cert.Warnings, w =>
+            w.Severity == WarningSeverity.Info &&
+            w.Message.Contains("Reverse DNS hostname") &&
+            w.Message.Contains("different.example.com"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_ReverseInSans_NoWarning()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:primary.example.com",
+                "DNS:reverse.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            ReverseHostname = "reverse.example.com"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.DoesNotContain(cert.Warnings, w =>
+            w.Message.Contains("Reverse DNS hostname"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_ReverseLookupFailed_NoWarning()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:primary.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            ReverseHostname = "(reverse lookup failed)"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.DoesNotContain(cert.Warnings, w =>
+            w.Message.Contains("Reverse DNS hostname"));
+    }
+
+    [Fact]
+    public void CrossReferenceSans_NullKerberos_NoAction()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=primary.example.com",
+            SubjectAlternativeNames = new List<string> { "DNS:primary.example.com" }
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, null);
+
+        Assert.Empty(cert.Warnings);
+    }
+
+    [Fact]
+    public void CrossReferenceSans_CnameMatchesWildcard_NoWarning()
+    {
+        var cert = new CertificateInfo
+        {
+            Subject = "CN=*.example.com",
+            SubjectAlternativeNames = new List<string>
+            {
+                "DNS:*.example.com"
+            }
+        };
+        var kerberos = new KerberosDiagnostics
+        {
+            CnameTarget = "server1.example.com"
+        };
+
+        CertificateAnalyzer.CrossReferenceSans(cert, kerberos);
+
+        Assert.DoesNotContain(cert.Warnings, w =>
+            w.Message.Contains("CNAME target"));
+    }
+
+    [Fact]
     public void HealthCheck_NotYetValid()
     {
         var info = new CertificateInfo

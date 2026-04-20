@@ -122,6 +122,13 @@ public static class ConsoleReporter
             Console.WriteLine();
             ReportKerberos(info.Kerberos);
         }
+
+        /* SAN connectivity tests */
+        if (info.SanConnectivityResults is { Count: > 0 })
+        {
+            Console.WriteLine();
+            ReportSanConnectivity(info.SanConnectivityResults);
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -166,39 +173,51 @@ public static class ConsoleReporter
 
     private static void ReportKerberos(KerberosDiagnostics kerberos)
     {
-        WriteHeader("DNS Resolution");
-        WriteField("Requested Hostname", kerberos.RequestedHostname);
+        bool hasDnsData = kerberos.ResolvedIpAddresses.Count > 0 ||
+                          kerberos.DnsError != null ||
+                          kerberos.DnsRecordTypes.Count > 0;
+        bool hasSpnData = kerberos.ExpectedSpns.Count > 0 ||
+                          kerberos.SpnLookupError != null;
 
-        if (kerberos.DnsError != null)
+        if (hasDnsData)
         {
-            WriteField("DNS Error", kerberos.DnsError);
+            WriteHeader("DNS Resolution");
+            WriteField("Requested Hostname", kerberos.RequestedHostname);
+
+            if (kerberos.DnsError != null)
+            {
+                WriteField("DNS Error", kerberos.DnsError);
+            }
+            else
+            {
+                if (kerberos.ResolvedFqdn != null)
+                {
+                    WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
+                }
+
+                if (kerberos.DnsRecordTypes.Count > 0)
+                {
+                    WriteField("Record Types", string.Join(", ", kerberos.DnsRecordTypes));
+                }
+
+                WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
+                    ? string.Join(", ", kerberos.ResolvedIpAddresses)
+                    : "(none)");
+                WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
+                WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
+
+                if (kerberos.CnameTarget != null)
+                {
+                    WriteField("CNAME Target", kerberos.CnameTarget);
+                }
+            }
+
+            Console.WriteLine();
         }
-        else
+
+        if (hasSpnData)
         {
-            if (kerberos.ResolvedFqdn != null)
-            {
-                WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
-            }
-
-            if (kerberos.DnsRecordTypes.Count > 0)
-            {
-                WriteField("Record Types", string.Join(", ", kerberos.DnsRecordTypes));
-            }
-
-            WriteField("Resolved IPs", kerberos.ResolvedIpAddresses.Count > 0
-                ? string.Join(", ", kerberos.ResolvedIpAddresses)
-                : "(none)");
-            WriteField("Reverse Lookup", kerberos.ReverseHostname ?? "(not available)");
-            WriteField("Forward/Reverse Match", kerberos.ForwardReverseMismatch ? "MISMATCH" : "OK");
-
-            if (kerberos.CnameTarget != null)
-            {
-                WriteField("CNAME Target", kerberos.CnameTarget);
-            }
-        }
-
-        Console.WriteLine();
-        WriteHeader("Kerberos SPN Registration");
+            WriteHeader("Kerberos SPN Registration");
 
         if (kerberos.SpnLookupError != null)
         {
@@ -225,18 +244,83 @@ public static class ConsoleReporter
 
                 WriteFieldColored(expected.Label, expected.Spn, status, color);
             }
+
+            /* SAN SPN coverage (--full-spn-diagnostics) */
+            if (kerberos.SanSpnCoverage is { Count: > 0 })
+            {
+                Console.WriteLine();
+                WriteHeader("SAN SPN Coverage");
+                foreach (var sanSpn in kerberos.SanSpnCoverage)
+                {
+                    string status;
+                    ConsoleColor color;
+                    if (sanSpn.Found)
+                    {
+                        string account = sanSpn.AccountName ?? "unknown";
+                        string type = sanSpn.AccountType != null ? $" ({sanSpn.AccountType})" : "";
+                        status = $"REGISTERED → {account}{type}";
+                        color = ConsoleColor.Green;
+                    }
+                    else
+                    {
+                        status = "NOT FOUND";
+                        color = ConsoleColor.Yellow;
+                    }
+
+                    WriteFieldColored(sanSpn.SanHostname, sanSpn.Spn, status, color);
+                }
+            }
+
+            /* CNAME target SPNs — shown when the requested hostname is a CNAME */
+            if (kerberos.CnameTargetSpns is { Count: > 0 })
+            {
+                Console.WriteLine();
+                WriteHeader($"CNAME Target SPN Registration ({kerberos.CnameTarget})");
+                foreach (var expected in kerberos.CnameTargetSpns)
+                {
+                    string status;
+                    ConsoleColor color;
+                    if (expected.Result?.Found == true)
+                    {
+                        string account = expected.Result.AccountName ?? "unknown";
+                        string type = expected.Result.AccountType != null ? $" ({expected.Result.AccountType})" : "";
+                        status = $"REGISTERED → {account}{type}";
+                        color = ConsoleColor.Green;
+                    }
+                    else
+                    {
+                        status = "NOT FOUND";
+                        color = ConsoleColor.Yellow;
+                    }
+
+                    WriteFieldColored(expected.Label, expected.Spn, status, color);
+                }
+            }
         }
+        } /* end if (hasSpnData) */
 
         if (kerberos.Warnings.Count > 0)
         {
             Console.WriteLine();
             WriteHeader("Kerberos Health Checks");
             WriteWarningList(kerberos.Warnings);
+
+            if (kerberos.SuggestedSetspnCommands.Count > 0)
+            {
+                Console.WriteLine();
+                WriteColored("  To register the missing SPN(s), run:", ConsoleColor.White);
+                Console.WriteLine();
+                foreach (string cmd in kerberos.SuggestedSetspnCommands)
+                {
+                    WriteColored($"    {cmd}", ConsoleColor.White);
+                    Console.WriteLine();
+                }
+            }
         }
-        else
+        else if (hasDnsData || hasSpnData)
         {
             Console.WriteLine();
-            WriteColored("[PASS] No Kerberos issues detected.", ConsoleColor.Green);
+            WriteColored("[PASS] No diagnostic issues detected.", ConsoleColor.Green);
             Console.WriteLine();
         }
     }
@@ -359,6 +443,52 @@ public static class ConsoleReporter
         "Md5"    => "MD5",
         _        => raw
     };
+
+    private static void ReportSanConnectivity(List<SanConnectivityResult> results)
+    {
+        WriteHeader("SAN Connectivity Tests");
+
+        foreach (var result in results)
+        {
+            if (!result.Connected)
+            {
+                WriteFieldColored("SAN", result.SanHostname,
+                    $"FAILED — {result.Error}", ConsoleColor.Red);
+            }
+            else if (result.SameCertificate)
+            {
+                WriteFieldColored("SAN", result.SanHostname,
+                    "OK — same certificate", ConsoleColor.Green);
+            }
+            else
+            {
+                string certSubject = result.SecurityInfo?.Certificate?.Subject ?? "(no cert)";
+                WriteFieldColored("SAN", result.SanHostname,
+                    $"DIFFERENT CERT — {certSubject}", ConsoleColor.Yellow);
+            }
+
+            /* Show key differences for connected SANs */
+            if (result.Connected && result.SecurityInfo != null)
+            {
+                var si = result.SecurityInfo;
+                if (!result.SameCertificate && si.Certificate != null)
+                {
+                    WriteField("    Subject", si.Certificate.Subject);
+                    WriteField("    Thumbprint", si.Certificate.ThumbprintSha256[..16] + "...");
+                    WriteField("    Valid To", $"{si.Certificate.ValidTo:yyyy-MM-dd} ({si.Certificate.DaysUntilExpiry} days)");
+                }
+                if (si.TlsProtocolVersion != null)
+                {
+                    WriteField("    TLS Version", si.TlsProtocolVersion);
+                }
+                if (!si.IsEncrypted)
+                {
+                    WriteColored("    [WARN] Connection via this SAN is NOT encrypted.", ConsoleColor.Yellow);
+                    Console.WriteLine();
+                }
+            }
+        }
+    }
 
     private static void WriteHeader(string title)
     {

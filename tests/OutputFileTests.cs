@@ -26,6 +26,10 @@ public class OutputFileTests
     [InlineData("***", "output.json")]
     [InlineData("", "output.json")]
     [InlineData("   ", "output.json")]
+    [InlineData("..", "output.json")]
+    [InlineData("..\\..\\etc", "etc.json")]
+    [InlineData("a..b", "a.b.json")]
+    [InlineData("....", "output.json")]
     public void GenerateOutputFileName_FallsBackToDefault(string serverName, string expected)
     {
         string result = OutputFileHelper.GenerateOutputFileName(serverName);
