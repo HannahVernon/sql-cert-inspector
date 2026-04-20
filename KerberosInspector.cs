@@ -379,7 +379,7 @@ public static class KerberosInspector
                 foreach (var spn in specificSpns.Where(s =>
                     s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
                 {
-                    diag.SuggestedSetspnCommands.Add($"setspn -S {spn.Spn} <DOMAIN\\ServiceAccount>");
+                    diag.SuggestedSetspnCommands.Add($"setspn -S '{spn.Spn}' <DOMAIN\\ServiceAccount>");
                 }
             }
         }
@@ -393,7 +393,7 @@ public static class KerberosInspector
             foreach (var spn in specificSpns.Where(s =>
                 s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
             {
-                diag.SuggestedSetspnCommands.Add($"setspn -S {spn.Spn} <DOMAIN\\ServiceAccount>");
+                diag.SuggestedSetspnCommands.Add($"setspn -S '{spn.Spn}' <DOMAIN\\ServiceAccount>");
             }
         }
 
@@ -450,9 +450,14 @@ public static class KerberosInspector
 
         if (sanHostnames.Count == 0) return;
 
+        /* Cap the number of SAN SPN lookups to prevent excessive LDAP queries
+           when a certificate has a very large number of SANs (security audit P5) */
+        const int maxSanLookups = 50;
+        bool capped = sanHostnames.Count > maxSanLookups;
+
         diag.SanSpnCoverage = new List<SanSpnCheck>();
 
-        foreach (string sanHost in sanHostnames)
+        foreach (string sanHost in sanHostnames.Take(maxSanLookups))
         {
             string spn = $"{SpnServiceClass}/{sanHost}:{port}";
             var result = LookupSpn(spn);
@@ -465,6 +470,13 @@ public static class KerberosInspector
                 AccountName = result.AccountName,
                 AccountType = result.AccountType
             });
+        }
+
+        if (capped)
+        {
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                $"Certificate contains {sanHostnames.Count} DNS SANs; only the first " +
+                $"{maxSanLookups} were checked for SPN coverage."));
         }
     }
 }
