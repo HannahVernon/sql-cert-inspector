@@ -21,6 +21,9 @@ public sealed class KerberosDiagnostics
 
     /* Warnings */
     public List<KerberosWarning> Warnings { get; set; } = new();
+
+    /* Remediation — suggested setspn commands for missing SPNs */
+    public List<string> SuggestedSetspnCommands { get; set; } = new();
 }
 
 /// <summary>

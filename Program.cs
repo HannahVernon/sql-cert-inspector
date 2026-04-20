@@ -36,7 +36,17 @@ var noColorOption = new Option<bool>("--no-color")
 
 var skipKerberosOption = new Option<bool>("--skip-kerberos")
 {
-    Description = "Skip Kerberos and DNS diagnostics"
+    Description = "Skip Kerberos SPN diagnostics (DNS diagnostics still run)"
+};
+
+var skipDnsOption = new Option<bool>("--skip-dns")
+{
+    Description = "Skip DNS diagnostics (Kerberos SPN lookups still run using the raw hostname)"
+};
+
+var fullSpnDiagnosticsOption = new Option<bool>("--full-spn-diagnostics")
+{
+    Description = "Check all SPN variants including portless base SPNs (normally only port/instance-specific SPNs are checked)"
 };
 
 var outputOption = new Option<string?>("--output", "-o")
@@ -50,18 +60,28 @@ var encryptStrictOption = new Option<bool>("--encrypt-strict", "--tds8")
     Description = "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)"
 };
 
+var testSanConnectivityOption = new Option<bool>("--test-san-connectivity")
+{
+    Description = "Perform a full certificate inspection for each DNS name in the certificate's SANs"
+};
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.");
 
+/* Required */
 rootCommand.Options.Add(serverOption);
-rootCommand.Options.Add(portOption);
-rootCommand.Options.Add(timeoutOption);
-rootCommand.Options.Add(jsonOption);
-rootCommand.Options.Add(chainOption);
-rootCommand.Options.Add(noColorOption);
-rootCommand.Options.Add(skipKerberosOption);
-rootCommand.Options.Add(outputOption);
+/* Optional — alphabetical */
 rootCommand.Options.Add(encryptStrictOption);
+rootCommand.Options.Add(fullSpnDiagnosticsOption);
+rootCommand.Options.Add(jsonOption);
+rootCommand.Options.Add(noColorOption);
+rootCommand.Options.Add(outputOption);
+rootCommand.Options.Add(portOption);
+rootCommand.Options.Add(chainOption);
+rootCommand.Options.Add(skipDnsOption);
+rootCommand.Options.Add(skipKerberosOption);
+rootCommand.Options.Add(testSanConnectivityOption);
+rootCommand.Options.Add(timeoutOption);
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
@@ -75,6 +95,9 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         ShowFullCertificateChain = parseResult.GetValue(chainOption),
         NoColor = parseResult.GetValue(noColorOption),
         SkipKerberos = parseResult.GetValue(skipKerberosOption),
+        SkipDns = parseResult.GetValue(skipDnsOption),
+        FullSpnDiagnostics = parseResult.GetValue(fullSpnDiagnosticsOption),
+        TestSanConnectivity = parseResult.GetValue(testSanConnectivityOption),
         OutputFileSpecified = outputSpecified,
         OutputFile = outputSpecified ? parseResult.GetValue(outputOption) : null,
         EncryptStrict = parseResult.GetValue(encryptStrictOption)
@@ -198,7 +221,9 @@ static async Task<int> RunAsync(CommandLineOptions options)
         WriteInfo(options, "Running Kerberos and DNS diagnostics...");
         try
         {
-            securityInfo.Kerberos = KerberosInspector.Inspect(endpoint.Host, port, endpoint.InstanceName);
+            securityInfo.Kerberos = KerberosInspector.Inspect(
+                endpoint.Host, port, endpoint.InstanceName,
+                endpoint.IsPortExplicit, options.FullSpnDiagnostics);
         }
         catch (Exception ex)
         {

@@ -24,7 +24,7 @@ public class KerberosHealthCheckTests
     }
 
     [Fact]
-    public void PortSpnFound_BaseAbsent_NamedInstance_EmitsInfo()
+    public void PortSpnFound_NamedInstance_NoBaseSpns_EmitsInfo()
     {
         var diag = new KerberosDiagnostics
         {
@@ -32,15 +32,14 @@ public class KerberosHealthCheckTests
             ExpectedSpns = new List<SpnExpectation>
             {
                 MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:22136", found: true, account: "svc-sql"),
-                MakeSpn("FQDN + Instance", "MSSQLSvc/db.example.com:SQLPROD", found: true, account: "svc-sql"),
-                MakeSpn("FQDN (base)", "MSSQLSvc/db.example.com", found: false)
+                MakeSpn("FQDN + Instance", "MSSQLSvc/db.example.com:SQLPROD", found: true, account: "svc-sql")
             }
         };
 
         KerberosInspector.RunHealthChecks(diag, 22136, isNamedInstance: true);
 
-        Assert.Contains(diag.Warnings, w =>
-            w.Severity == WarningSeverity.Info && w.Message.Contains("expected configuration"));
+        /* No warnings — all expected SPNs are registered */
+        Assert.Empty(diag.Warnings);
     }
 
     [Fact]
@@ -171,5 +170,69 @@ public class KerberosHealthCheckTests
                 AccountType = account != null ? "User" : null
             }
         };
+    }
+
+    [Fact]
+    public void NoSpnsFound_SuggestsSetspnForFqdnOnly()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: false),
+                MakeSpn("Short + Port", "MSSQLSvc/db:1433", found: false),
+                MakeSpn("FQDN (base)", "MSSQLSvc/db.example.com", found: false),
+                MakeSpn("Short (base)", "MSSQLSvc/db", found: false)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Single(diag.SuggestedSetspnCommands);
+        Assert.Contains("MSSQLSvc/db.example.com:1433", diag.SuggestedSetspnCommands[0]);
+        Assert.DoesNotContain(diag.SuggestedSetspnCommands, c => c.Contains("MSSQLSvc/db:"));
+    }
+
+    [Fact]
+    public void NoSpnsFound_NamedInstance_SuggestsPortAndInstance()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:22136", found: false),
+                MakeSpn("FQDN + Instance", "MSSQLSvc/db.example.com:SQLPROD", found: false),
+                MakeSpn("Short + Port", "MSSQLSvc/db:22136", found: false),
+                MakeSpn("Short + Instance", "MSSQLSvc/db:SQLPROD", found: false)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 22136, true);
+
+        Assert.Equal(2, diag.SuggestedSetspnCommands.Count);
+        Assert.Contains(diag.SuggestedSetspnCommands, c => c.Contains("MSSQLSvc/db.example.com:22136"));
+        Assert.Contains(diag.SuggestedSetspnCommands, c => c.Contains("MSSQLSvc/db.example.com:SQLPROD"));
+        /* Should NOT suggest short-name SPNs */
+        Assert.DoesNotContain(diag.SuggestedSetspnCommands, c => c.Contains("MSSQLSvc/db:"));
+    }
+
+    [Fact]
+    public void AllSpnsFound_NoSetspnSuggestions()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql"),
+                MakeSpn("FQDN (base)", "MSSQLSvc/db.example.com", found: true, account: "svc-sql")
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Empty(diag.SuggestedSetspnCommands);
     }
 }

@@ -14,7 +14,9 @@ public static class KerberosInspector
 {
     private const string SpnServiceClass = "MSSQLSvc";
 
-    public static KerberosDiagnostics Inspect(string hostname, int port, string? instanceName)
+    public static KerberosDiagnostics Inspect(
+        string hostname, int port, string? instanceName,
+        bool isPortExplicit = false, bool fullSpnDiagnostics = false)
     {
         var diag = new KerberosDiagnostics
         {
@@ -27,7 +29,8 @@ public static class KerberosInspector
 
         /* Use the resolved FQDN for SPN construction if input was a short name */
         string spnHostname = diag.ResolvedFqdn ?? hostname;
-        diag.ExpectedSpns = BuildExpectedSpns(spnHostname, port, instanceName);
+        diag.ExpectedSpns = BuildExpectedSpns(
+            spnHostname, port, instanceName, isPortExplicit, fullSpnDiagnostics);
 
         PerformReverseLookup(diag);
         PerformSpnLookup(diag);
@@ -42,7 +45,9 @@ public static class KerberosInspector
     /// Builds the list of expected SPN variants for a given SQL Server endpoint.
     /// Visible for unit testing.
     /// </summary>
-    public static List<SpnExpectation> BuildExpectedSpns(string hostname, int port, string? instanceName)
+    public static List<SpnExpectation> BuildExpectedSpns(
+        string hostname, int port, string? instanceName,
+        bool isPortExplicit = false, bool fullSpnDiagnostics = false)
     {
         var spns = new List<SpnExpectation>();
         bool isNamedInstance = instanceName != null;
@@ -52,6 +57,13 @@ public static class KerberosInspector
         string shortName = hostname.Split('.')[0];
         bool hasShortName = !IPAddress.TryParse(hostname, out _) &&
                             !string.Equals(shortName, hostname, StringComparison.OrdinalIgnoreCase);
+
+        /* Base (portless) SPNs are only relevant for non-TCP protocols on default
+           instances. For TCP connections (which this tool uses), the port-based SPN
+           is what SQL Server registers and what clients use. Base SPNs are only
+           included when --full-spn-diagnostics is specified, AND the connection is
+           a default instance with an implicit (non-explicit) port. */
+        bool includeBaseSpns = fullSpnDiagnostics && !isNamedInstance && !isPortExplicit;
 
         /* FQDN + Port — always present */
         spns.Add(new SpnExpectation
@@ -87,20 +99,22 @@ public static class KerberosInspector
             }
         }
 
-        /* Base SPNs (no port/instance — used for default instances) */
-        spns.Add(new SpnExpectation
-        {
-            Label = "FQDN (base)",
-            Spn = $"{SpnServiceClass}/{hostname}"
-        });
-
-        if (hasShortName)
+        if (includeBaseSpns)
         {
             spns.Add(new SpnExpectation
             {
-                Label = "Short (base)",
-                Spn = $"{SpnServiceClass}/{shortName}"
+                Label = "FQDN (base)",
+                Spn = $"{SpnServiceClass}/{hostname}"
             });
+
+            if (hasShortName)
+            {
+                spns.Add(new SpnExpectation
+                {
+                    Label = "Short (base)",
+                    Spn = $"{SpnServiceClass}/{shortName}"
+                });
+            }
         }
 
         return spns;
@@ -304,13 +318,14 @@ public static class KerberosInspector
                 $"No SPN registered for this SQL Server instance. None of the expected SPNs " +
                 $"({allSpns}) were found in Active Directory. " +
                 "Kerberos authentication will NOT work — clients will fall back to NTLM."));
-        }
-        else if (anySpecificFound && !anyBaseFound && isNamedInstance)
-        {
-            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
-                "Port/instance-specific SPN(s) are registered and base SPN is absent. " +
-                "This is the expected configuration for a named instance — " +
-                "a base SPN without a port could conflict with other instances on the same host."));
+
+            /* Only suggest FQDN-based SPNs — short-name SPNs can cause conflicts
+               in multi-domain environments and should be left to the administrator */
+            foreach (var spn in specificSpns.Where(s =>
+                s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
+            {
+                diag.SuggestedSetspnCommands.Add($"setspn -S {spn.Spn} <DOMAIN\\ServiceAccount>");
+            }
         }
         else if (!anySpecificFound && anyBaseFound && port != 1433)
         {
@@ -318,6 +333,12 @@ public static class KerberosInspector
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
                 $"No port/instance-specific SPN found ({missingSpecific}), but a base SPN exists. " +
                 $"Since this instance uses a non-default port ({port}), a port-specific SPN is recommended."));
+
+            foreach (var spn in specificSpns.Where(s =>
+                s.Result?.Found != true && s.Label.StartsWith("FQDN", StringComparison.Ordinal)))
+            {
+                diag.SuggestedSetspnCommands.Add($"setspn -S {spn.Spn} <DOMAIN\\ServiceAccount>");
+            }
         }
 
         /* Check for SPNs registered to different accounts */

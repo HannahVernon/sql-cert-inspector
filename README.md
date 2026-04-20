@@ -9,7 +9,7 @@ A command-line tool that inspects the TLS certificate and Kerberos configuration
 - **Connection security metadata** — TLS protocol version, cipher suite, SQL Server version, encryption mode
 - **Certificate health checks** — warns about expired certs, expiring soon, self-signed, hostname mismatch, weak keys, deprecated algorithms
 - **Full certificate chain** — optionally display intermediate and root CA certificates
-- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification
+- **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification, and `setspn` remediation commands when SPNs are missing
 - **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, avoiding false mismatch warnings
 - **TDS 8.0 (Strict) support** — connect to servers using strict encryption (`--encrypt-strict` / `--tds8`) where TLS negotiation precedes all TDS traffic; auto-fallback between TDS 7.x and 8.0 with user guidance
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
@@ -47,6 +47,7 @@ sql-cert-inspector --server <server> [options]
 | `--output [filename]` | `-o` | Write JSON output to a file. If no filename is given, auto-generates from `--server` value. Suppresses console output. |
 | `--show-full-certificate-chain` | | Display the full certificate chain |
 | `--skip-kerberos` | | Skip Kerberos and DNS diagnostics |
+| `--full-spn-diagnostics` | | Check all SPN variants including portless base SPNs (for non-TCP protocols) |
 | `--encrypt-strict` | `--tds8` | Use TDS 8.0 strict encryption (TLS before PRELOGIN) |
 | `--no-color` | | Disable colored console output |
 | `--help` | | Show help |
@@ -141,15 +142,23 @@ Running Kerberos and DNS diagnostics...
   Forward/Reverse Match     OK
 
 ═══ Kerberos SPN Registration ═══
-  Expected SPN (port)       MSSQLSvc/myserver.corp.example.com:22136
-  Expected SPN (base)       MSSQLSvc/myserver.corp.example.com
-  Port SPN                  REGISTERED → svc-sql-prod (User)
-  Base SPN                  NOT FOUND
+  FQDN + Port          MSSQLSvc/myserver.corp.example.com:22136  REGISTERED → svc-sql-prod (User)
+  FQDN + Instance      MSSQLSvc/myserver.corp.example.com:SQLPROD  REGISTERED → svc-sql-prod (User)
+  Short + Port         MSSQLSvc/myserver:22136  NOT FOUND
+  Short + Instance     MSSQLSvc/myserver:SQLPROD  NOT FOUND
 
-═══ Kerberos Health Checks ═══
-  [INFO] Port-specific SPN is registered and base SPN is absent. This is the expected
-         configuration for a named instance - a base SPN without a port could conflict
-         with other instances on the same host.
+[PASS] No Kerberos issues detected.
+```
+
+> **SPN scope:** By default, only port- and instance-specific SPNs are checked — these
+> are what SQL Server registers for TCP connections and what client drivers use. Portless
+> base SPNs (used by non-TCP protocols like named pipes) are only shown with
+> `--full-spn-diagnostics`. This applies to standalone instances, AG listeners, and
+> failover cluster virtual names — the SPN format is the same for all.
+>
+> When missing SPNs are detected, the tool suggests `setspn` commands using only the
+> FQDN-qualified port and instance variants, which are safe to register without risk of
+> conflicting with other instances on the same host.
 ```
 
 ## Exit Codes

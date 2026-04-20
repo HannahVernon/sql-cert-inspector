@@ -165,13 +165,12 @@ public class SpnFqdnTests
         var spns = KerberosInspector.BuildExpectedSpns(
             "myserver.corp.example.com", 1433, "INST1");
 
-        /* Should have FQDN + Port, FQDN + Instance, Short + Port, Short + Instance, FQDN base, Short base */
+        /* Named instances should have FQDN + Port, FQDN + Instance, Short + Port, Short + Instance — no base SPNs */
         Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver.corp.example.com:1433" && s.Label == "FQDN + Port");
         Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver.corp.example.com:INST1" && s.Label == "FQDN + Instance");
         Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver:1433" && s.Label == "Short + Port");
         Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver:INST1" && s.Label == "Short + Instance");
-        Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver.corp.example.com" && s.Label == "FQDN (base)");
-        Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver" && s.Label == "Short (base)");
+        Assert.DoesNotContain(spns, s => s.Label.Contains("base"));
     }
 
     [Fact]
@@ -180,10 +179,12 @@ public class SpnFqdnTests
         /* When input IS the short name (no dots), hasShortName is false */
         var spns = KerberosInspector.BuildExpectedSpns("myserver", 1433, null);
 
+        Assert.Single(spns);
         Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver:1433");
-        Assert.Contains(spns, s => s.Spn == "MSSQLSvc/myserver");
         /* No "Short +" labels since hostname IS the short name */
         Assert.DoesNotContain(spns, s => s.Label.StartsWith("Short"));
+        /* No base SPNs by default */
+        Assert.DoesNotContain(spns, s => s.Label.Contains("base"));
     }
 }
 

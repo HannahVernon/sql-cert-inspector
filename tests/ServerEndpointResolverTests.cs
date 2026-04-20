@@ -12,6 +12,7 @@ public class ServerEndpointResolverTests
         Assert.Equal("myserver", result.Host);
         Assert.Null(result.InstanceName);
         Assert.Equal(1433, result.ExplicitPort);
+        Assert.False(result.IsPortExplicit);
         Assert.False(result.NeedsBrowserLookup);
     }
 
@@ -23,6 +24,7 @@ public class ServerEndpointResolverTests
         Assert.Equal("myserver", result.Host);
         Assert.Null(result.InstanceName);
         Assert.Equal(5000, result.ExplicitPort);
+        Assert.True(result.IsPortExplicit);
     }
 
     [Fact]
@@ -33,6 +35,7 @@ public class ServerEndpointResolverTests
         Assert.Equal("myserver", result.Host);
         Assert.Null(result.InstanceName);
         Assert.Equal(1434, result.ExplicitPort);
+        Assert.True(result.IsPortExplicit);
     }
 
     [Fact]

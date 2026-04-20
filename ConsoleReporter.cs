@@ -232,6 +232,18 @@ public static class ConsoleReporter
             Console.WriteLine();
             WriteHeader("Kerberos Health Checks");
             WriteWarningList(kerberos.Warnings);
+
+            if (kerberos.SuggestedSetspnCommands.Count > 0)
+            {
+                Console.WriteLine();
+                WriteColored("  To register the missing SPN(s), run:", ConsoleColor.White);
+                Console.WriteLine();
+                foreach (string cmd in kerberos.SuggestedSetspnCommands)
+                {
+                    WriteColored($"    {cmd}", ConsoleColor.White);
+                    Console.WriteLine();
+                }
+            }
         }
         else
         {
