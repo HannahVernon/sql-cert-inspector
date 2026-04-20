@@ -299,8 +299,9 @@ public static class KerberosInspector
         {
             diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
                 $"Hostname '{diag.RequestedHostname}' appears to be a CNAME pointing to " +
-                $"'{diag.CnameTarget}'. Kerberos uses the original hostname for SPN construction, " +
-                "which may cause authentication failures if the SPN is registered under the canonical name."));
+                $"'{diag.CnameTarget}'. Kerberos will use '{diag.RequestedHostname}' (the " +
+                "requested hostname) for SPN construction, which may cause authentication " +
+                $"failures if the SPN is registered under the canonical name '{diag.CnameTarget}'."));
         }
 
         /* SPN issues — only check when SPNs were actually looked up */
