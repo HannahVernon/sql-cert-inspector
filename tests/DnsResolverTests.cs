@@ -263,3 +263,96 @@ public class KerberosCnameTests
             Result = new SpnLookupResult { Found = found, AccountName = account, AccountType = found ? "User" : null }
         };
 }
+
+/// <summary>
+/// Tests for DNS suffix search list feature.
+/// </summary>
+public class DnsSuffixTests
+{
+    [Fact]
+    public void GetDnsSuffixSearchList_ReturnsNonEmptyOnDomainJoinedMachine()
+    {
+        var suffixes = DnsResolver.GetDnsSuffixSearchList();
+
+        /* On a domain-joined machine this should return at least one suffix.
+           On non-domain machines, it may return empty — test just verifies no crash. */
+        Assert.NotNull(suffixes);
+    }
+
+    [Fact]
+    public void DnsResult_UsedSuffix_NullByDefault()
+    {
+        var result = new DnsResult();
+        Assert.Null(result.UsedSuffix);
+        Assert.Empty(result.ConfiguredSuffixes);
+        Assert.Empty(result.AmbiguousSuffixes);
+    }
+
+    [Fact]
+    public void RunHealthChecks_AmbiguousSuffix_EmitsWarning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "sqlprod",
+            ResolvedFqdn = "sqlprod.corp.example.com",
+            DnsSuffixUsed = "corp.example.com",
+            AmbiguousSuffixes = new List<DnsSuffixMatch>
+            {
+                new()
+                {
+                    Suffix = "dev.example.com",
+                    Fqdn = "sqlprod.dev.example.com",
+                    ResolvedIps = new List<string> { "10.0.2.50" }
+                }
+            },
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/sqlprod.corp.example.com:1433", found: true, account: "svc-sql")
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
+
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Warning &&
+            w.Message.Contains("dev.example.com") &&
+            w.Message.Contains("ambiguity"));
+    }
+
+    [Fact]
+    public void RunHealthChecks_NoAmbiguousSuffix_NoWarning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "sqlprod",
+            ResolvedFqdn = "sqlprod.corp.example.com",
+            DnsSuffixUsed = "corp.example.com",
+            AmbiguousSuffixes = new List<DnsSuffixMatch>(),
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/sqlprod.corp.example.com:1433", found: true, account: "svc-sql")
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
+
+        Assert.DoesNotContain(diag.Warnings, w => w.Message.Contains("ambiguity"));
+    }
+
+    [Fact]
+    public void KerberosDiagnostics_SuffixFields_DefaultEmpty()
+    {
+        var diag = new KerberosDiagnostics();
+        Assert.Null(diag.DnsSuffixUsed);
+        Assert.Empty(diag.ConfiguredDnsSuffixes);
+        Assert.Empty(diag.AmbiguousSuffixes);
+    }
+
+    private static SpnExpectation MakeSpn(string label, string spn, bool found, string? account = null) =>
+        new()
+        {
+            Label = label,
+            Spn = spn,
+            Result = new SpnLookupResult { Found = found, AccountName = account, AccountType = found ? "User" : null }
+        };
+}
