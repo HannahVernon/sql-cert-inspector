@@ -131,6 +131,14 @@ public static class JsonReporter
                     AccountName = s.AccountName,
                     AccountType = s.AccountType
                 }).ToList(),
+                CnameTargetSpns = info.Kerberos.CnameTargetSpns?.Select(e => new SpnJson
+                {
+                    Label = e.Label,
+                    Spn = e.Spn,
+                    Found = e.Result?.Found ?? false,
+                    AccountName = e.Result?.AccountName,
+                    AccountType = e.Result?.AccountType
+                }).ToList(),
                 Warnings = info.Kerberos.Warnings.Count > 0
                     ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
                     : null
@@ -277,6 +285,7 @@ public static class JsonReporter
         public List<SpnJson> Spns { get; set; } = new();
         public string? SpnLookupError { get; set; }
         public List<SanSpnJson>? SanSpnCoverage { get; set; }
+        public List<SpnJson>? CnameTargetSpns { get; set; }
         public List<WarningJson>? Warnings { get; set; }
     }
 

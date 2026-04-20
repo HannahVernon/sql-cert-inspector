@@ -270,6 +270,32 @@ public static class ConsoleReporter
                     WriteFieldColored(sanSpn.SanHostname, sanSpn.Spn, status, color);
                 }
             }
+
+            /* CNAME target SPNs — shown when the requested hostname is a CNAME */
+            if (kerberos.CnameTargetSpns is { Count: > 0 })
+            {
+                Console.WriteLine();
+                WriteHeader($"CNAME Target SPN Registration ({kerberos.CnameTarget})");
+                foreach (var expected in kerberos.CnameTargetSpns)
+                {
+                    string status;
+                    ConsoleColor color;
+                    if (expected.Result?.Found == true)
+                    {
+                        string account = expected.Result.AccountName ?? "unknown";
+                        string type = expected.Result.AccountType != null ? $" ({expected.Result.AccountType})" : "";
+                        status = $"REGISTERED → {account}{type}";
+                        color = ConsoleColor.Green;
+                    }
+                    else
+                    {
+                        status = "NOT FOUND";
+                        color = ConsoleColor.Yellow;
+                    }
+
+                    WriteFieldColored(expected.Label, expected.Spn, status, color);
+                }
+            }
         }
         } /* end if (hasSpnData) */
 

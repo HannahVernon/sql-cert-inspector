@@ -121,7 +121,69 @@ public class KerberosHealthCheckTests
     }
 
     [Fact]
-    public void CnameDetected_EmitsWarning()
+    public void CnameDetected_CnameSpnFound_EmitsInfo()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "alias.example.com",
+            CnameTarget = "real-host.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/alias.example.com:1433", found: false),
+            },
+            CnameTargetSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/real-host.example.com:1433", found: true, account: "svc-sql"),
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
+
+        /* CNAME warning should be Info (not Warning) since canonical SPN exists */
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Info && w.Message.Contains("CNAME") &&
+            w.Message.Contains("Microsoft.Data.SqlClient"));
+
+        /* Should NOT emit [FAIL] — canonical SPN is found */
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Error && w.Message.Contains("will NOT work"));
+
+        /* Should emit Info about canonical SPN being used */
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Info && w.Message.Contains("CNAME target"));
+    }
+
+    [Fact]
+    public void CnameDetected_NoCnameSpn_EmitsWarningAndFail()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "alias.example.com",
+            CnameTarget = "real-host.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/alias.example.com:1433", found: false),
+            },
+            CnameTargetSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/real-host.example.com:1433", found: false),
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
+
+        /* CNAME warning should be Warning since no canonical SPN either */
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("CNAME") &&
+            w.Message.Contains("No SPN was found for either"));
+
+        /* Should emit [FAIL] since no SPN found anywhere */
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Error && w.Message.Contains("will NOT work"));
+    }
+
+    [Fact]
+    public void CnameDetected_RequestedSpnAlsoFound_NoFail()
     {
         var diag = new KerberosDiagnostics
         {
@@ -130,14 +192,18 @@ public class KerberosHealthCheckTests
             ExpectedSpns = new List<SpnExpectation>
             {
                 MakeSpn("FQDN + Port", "MSSQLSvc/alias.example.com:1433", found: true, account: "svc-sql"),
-                MakeSpn("FQDN (base)", "MSSQLSvc/alias.example.com", found: true, account: "svc-sql")
+            },
+            CnameTargetSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/real-host.example.com:1433", found: true, account: "svc-sql"),
             }
         };
 
         KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
 
-        Assert.Contains(diag.Warnings, w =>
-            w.Severity == WarningSeverity.Warning && w.Message.Contains("CNAME"));
+        /* Both requested and CNAME SPNs found — no errors */
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Error);
     }
 
     [Fact]

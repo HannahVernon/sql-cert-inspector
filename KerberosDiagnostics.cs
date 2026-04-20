@@ -19,6 +19,12 @@ public sealed class KerberosDiagnostics
     public List<SpnExpectation> ExpectedSpns { get; set; } = new();
     public string? SpnLookupError { get; set; }
 
+    /* CNAME target SPN information — SPNs checked for the canonical hostname
+       when a CNAME is detected. Microsoft.Data.SqlClient resolves CNAMEs via
+       Dns.GetHostEntry() before building SPNs, so these are the SPNs that
+       modern .NET clients actually use. */
+    public List<SpnExpectation>? CnameTargetSpns { get; set; }
+
     /* Warnings */
     public List<KerberosWarning> Warnings { get; set; } = new();
 
