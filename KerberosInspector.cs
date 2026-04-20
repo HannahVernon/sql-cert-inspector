@@ -358,5 +358,57 @@ public static class KerberosInspector
                 $"SPNs are registered to different accounts: {details}. " +
                 "This may cause unpredictable Kerberos authentication behavior."));
         }
+
+        /* SAN SPN coverage warnings */
+        if (diag.SanSpnCoverage != null)
+        {
+            var missingSanSpns = diag.SanSpnCoverage.Where(s => !s.Found).ToList();
+            if (missingSanSpns.Count > 0)
+            {
+                foreach (var missing in missingSanSpns)
+                {
+                    diag.Warnings.Add(new KerberosWarning(WarningSeverity.Info,
+                        $"SAN hostname '{missing.SanHostname}' has no SPN registered ({missing.Spn}). " +
+                        "Kerberos authentication will fail for clients connecting via this name."));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Performs SPN lookups for each DNS SAN hostname from the certificate that differs
+    /// from the primary connection hostname. Call after both cert and Kerberos inspection complete.
+    /// </summary>
+    public static void CrossReferenceSanSpns(
+        KerberosDiagnostics diag, CertificateInfo cert, int port, string connectionHostname)
+    {
+        if (diag.SpnLookupError != null) return;
+
+        var sanHostnames = cert.SubjectAlternativeNames
+            .Where(s => s.StartsWith("DNS:", StringComparison.OrdinalIgnoreCase))
+            .Select(s => s[4..])
+            .Where(h => !h.StartsWith("*")) /* skip wildcard SANs */
+            .Where(h => !string.Equals(h, connectionHostname, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (sanHostnames.Count == 0) return;
+
+        diag.SanSpnCoverage = new List<SanSpnCheck>();
+
+        foreach (string sanHost in sanHostnames)
+        {
+            string spn = $"{SpnServiceClass}/{sanHost}:{port}";
+            var result = LookupSpn(spn);
+
+            diag.SanSpnCoverage.Add(new SanSpnCheck
+            {
+                SanHostname = sanHost,
+                Spn = spn,
+                Found = result.Found,
+                AccountName = result.AccountName,
+                AccountType = result.AccountType
+            });
+        }
     }
 }

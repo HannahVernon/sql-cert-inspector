@@ -13,6 +13,7 @@ public sealed class CommandLineOptions
     public bool NoColor { get; set; }
     public bool SkipKerberos { get; set; }
     public bool FullSpnDiagnostics { get; set; }
+    public bool TestSanConnectivity { get; set; }
 
     /// <summary>
     /// When true, the --output option was specified on the command line.

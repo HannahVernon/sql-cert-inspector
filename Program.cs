@@ -231,6 +231,34 @@ static async Task<int> RunAsync(CommandLineOptions options)
         }
     }
 
+    /* Cross-reference certificate SANs with DNS/Kerberos data */
+    if (securityInfo.Certificate != null)
+    {
+        CertificateAnalyzer.CrossReferenceSans(securityInfo.Certificate, securityInfo.Kerberos);
+
+        /* SPN lookup per SAN hostname (--full-spn-diagnostics) */
+        if (options.FullSpnDiagnostics && securityInfo.Kerberos != null && OperatingSystem.IsWindows())
+        {
+            try
+            {
+                KerberosInspector.CrossReferenceSanSpns(
+                    securityInfo.Kerberos, securityInfo.Certificate,
+                    port, endpoint.Host);
+            }
+            catch (Exception ex)
+            {
+                WriteInfo(options, $"SAN SPN cross-reference failed: {ex.Message}");
+            }
+        }
+    }
+
+    /* SAN connectivity tests (--test-san-connectivity) */
+    if (options.TestSanConnectivity && securityInfo.Certificate != null &&
+        securityInfo.Certificate.SubjectAlternativeNames.Count > 0)
+    {
+        await RunSanConnectivityTests(options, securityInfo, endpoint.Host, port);
+    }
+
     /* Report */
     if (!options.Json && !options.OutputFileSpecified)
     {
@@ -336,6 +364,59 @@ static int WriteOutputFile(CommandLineOptions options, ConnectionSecurityInfo se
     {
         Console.Error.WriteLine($"ERROR: Cannot write output file '{Path.GetFileName(canonicalPath)}': {ex.GetType().Name}");
         return ExitCodes.FileWriteError;
+    }
+}
+
+/// <summary>
+/// Runs a full TDS PRELOGIN + TLS inspection for each DNS SAN hostname that differs
+/// from the primary connection hostname. Prevents recursion by not running SAN tests
+/// on sub-inspections.
+/// </summary>
+static async Task RunSanConnectivityTests(
+    CommandLineOptions options, ConnectionSecurityInfo primaryInfo,
+    string primaryHostname, int port)
+{
+    var sanHostnames = primaryInfo.Certificate!.SubjectAlternativeNames
+        .Where(s => s.StartsWith("DNS:", StringComparison.OrdinalIgnoreCase))
+        .Select(s => s[4..])
+        .Where(h => !h.StartsWith("*")) /* skip wildcard SANs */
+        .Where(h => !string.Equals(h, primaryHostname, StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (sanHostnames.Count == 0) return;
+
+    string primaryThumbprint = primaryInfo.Certificate.ThumbprintSha256;
+    primaryInfo.SanConnectivityResults = new List<SanConnectivityResult>();
+
+    WriteInfo(options, $"Testing SAN connectivity for {sanHostnames.Count} hostname(s)...");
+
+    foreach (string sanHost in sanHostnames)
+    {
+        WriteInfo(options, $"  Inspecting {sanHost}:{port}...");
+
+        var result = new SanConnectivityResult { SanHostname = sanHost };
+
+        try
+        {
+            using var client = new TdsPreloginClient();
+            var sanInfo = await client.InspectAsync(
+                sanHost, port, sanHost, options.Timeout,
+                showFullChain: false, options.EncryptStrict);
+
+            result.Connected = true;
+            result.SecurityInfo = sanInfo;
+            result.SameCertificate = sanInfo.Certificate != null &&
+                string.Equals(sanInfo.Certificate.ThumbprintSha256, primaryThumbprint,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            result.Connected = false;
+            result.Error = ex.Message;
+        }
+
+        primaryInfo.SanConnectivityResults.Add(result);
     }
 }
 

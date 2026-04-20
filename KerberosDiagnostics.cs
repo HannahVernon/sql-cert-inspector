@@ -24,6 +24,21 @@ public sealed class KerberosDiagnostics
 
     /* Remediation — suggested setspn commands for missing SPNs */
     public List<string> SuggestedSetspnCommands { get; set; } = new();
+
+    /* SAN SPN coverage — SPN lookup results for each certificate SAN hostname (--full-spn-diagnostics) */
+    public List<SanSpnCheck>? SanSpnCoverage { get; set; }
+}
+
+/// <summary>
+/// SPN lookup result for a single SAN hostname from the certificate.
+/// </summary>
+public sealed class SanSpnCheck
+{
+    public string SanHostname { get; set; } = string.Empty;
+    public string Spn { get; set; } = string.Empty;
+    public bool Found { get; set; }
+    public string? AccountName { get; set; }
+    public string? AccountType { get; set; }
 }
 
 /// <summary>

@@ -123,10 +123,34 @@ public static class JsonReporter
                     AccountType = e.Result?.AccountType
                 }).ToList(),
                 SpnLookupError = info.Kerberos.SpnLookupError,
+                SanSpnCoverage = info.Kerberos.SanSpnCoverage?.Select(s => new SanSpnJson
+                {
+                    SanHostname = s.SanHostname,
+                    Spn = s.Spn,
+                    Found = s.Found,
+                    AccountName = s.AccountName,
+                    AccountType = s.AccountType
+                }).ToList(),
                 Warnings = info.Kerberos.Warnings.Count > 0
                     ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
                     : null
             };
+        }
+
+        /* SAN connectivity results */
+        if (info.SanConnectivityResults is { Count: > 0 })
+        {
+            output.SanConnectivity = info.SanConnectivityResults.Select(r => new SanConnectivityJson
+            {
+                SanHostname = r.SanHostname,
+                Connected = r.Connected,
+                Error = r.Error,
+                SameCertificate = r.Connected ? r.SameCertificate : null,
+                TlsProtocol = r.SecurityInfo?.TlsProtocolVersion,
+                CertificateSubject = r.SecurityInfo?.Certificate?.Subject,
+                CertificateThumbprint = r.SecurityInfo?.Certificate?.ThumbprintSha256,
+                IsEncrypted = r.Connected ? r.SecurityInfo?.IsEncrypted : null
+            }).ToList();
         }
 
         return output;
@@ -184,6 +208,7 @@ public static class JsonReporter
         public List<CertificateJson>? CertificateChain { get; set; }
         public List<string>? ChainValidation { get; set; }
         public KerberosJson? Kerberos { get; set; }
+        public List<SanConnectivityJson>? SanConnectivity { get; set; }
     }
 
     private sealed class MetaJson
@@ -251,6 +276,7 @@ public static class JsonReporter
         public DnsJson? Dns { get; set; }
         public List<SpnJson> Spns { get; set; } = new();
         public string? SpnLookupError { get; set; }
+        public List<SanSpnJson>? SanSpnCoverage { get; set; }
         public List<WarningJson>? Warnings { get; set; }
     }
 
@@ -273,5 +299,26 @@ public static class JsonReporter
         public bool Found { get; set; }
         public string? AccountName { get; set; }
         public string? AccountType { get; set; }
+    }
+
+    private sealed class SanSpnJson
+    {
+        public string SanHostname { get; set; } = string.Empty;
+        public string Spn { get; set; } = string.Empty;
+        public bool Found { get; set; }
+        public string? AccountName { get; set; }
+        public string? AccountType { get; set; }
+    }
+
+    private sealed class SanConnectivityJson
+    {
+        public string SanHostname { get; set; } = string.Empty;
+        public bool Connected { get; set; }
+        public string? Error { get; set; }
+        public bool? SameCertificate { get; set; }
+        public string? TlsProtocol { get; set; }
+        public string? CertificateSubject { get; set; }
+        public string? CertificateThumbprint { get; set; }
+        public bool? IsEncrypted { get; set; }
     }
 }

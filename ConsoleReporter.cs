@@ -122,6 +122,13 @@ public static class ConsoleReporter
             Console.WriteLine();
             ReportKerberos(info.Kerberos);
         }
+
+        /* SAN connectivity tests */
+        if (info.SanConnectivityResults is { Count: > 0 })
+        {
+            Console.WriteLine();
+            ReportSanConnectivity(info.SanConnectivityResults);
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -224,6 +231,32 @@ public static class ConsoleReporter
                 }
 
                 WriteFieldColored(expected.Label, expected.Spn, status, color);
+            }
+
+            /* SAN SPN coverage (--full-spn-diagnostics) */
+            if (kerberos.SanSpnCoverage is { Count: > 0 })
+            {
+                Console.WriteLine();
+                WriteHeader("SAN SPN Coverage");
+                foreach (var sanSpn in kerberos.SanSpnCoverage)
+                {
+                    string status;
+                    ConsoleColor color;
+                    if (sanSpn.Found)
+                    {
+                        string account = sanSpn.AccountName ?? "unknown";
+                        string type = sanSpn.AccountType != null ? $" ({sanSpn.AccountType})" : "";
+                        status = $"REGISTERED → {account}{type}";
+                        color = ConsoleColor.Green;
+                    }
+                    else
+                    {
+                        status = "NOT FOUND";
+                        color = ConsoleColor.Yellow;
+                    }
+
+                    WriteFieldColored(sanSpn.SanHostname, sanSpn.Spn, status, color);
+                }
             }
         }
 
@@ -371,6 +404,52 @@ public static class ConsoleReporter
         "Md5"    => "MD5",
         _        => raw
     };
+
+    private static void ReportSanConnectivity(List<SanConnectivityResult> results)
+    {
+        WriteHeader("SAN Connectivity Tests");
+
+        foreach (var result in results)
+        {
+            if (!result.Connected)
+            {
+                WriteFieldColored("SAN", result.SanHostname,
+                    $"FAILED — {result.Error}", ConsoleColor.Red);
+            }
+            else if (result.SameCertificate)
+            {
+                WriteFieldColored("SAN", result.SanHostname,
+                    "OK — same certificate", ConsoleColor.Green);
+            }
+            else
+            {
+                string certSubject = result.SecurityInfo?.Certificate?.Subject ?? "(no cert)";
+                WriteFieldColored("SAN", result.SanHostname,
+                    $"DIFFERENT CERT — {certSubject}", ConsoleColor.Yellow);
+            }
+
+            /* Show key differences for connected SANs */
+            if (result.Connected && result.SecurityInfo != null)
+            {
+                var si = result.SecurityInfo;
+                if (!result.SameCertificate && si.Certificate != null)
+                {
+                    WriteField("    Subject", si.Certificate.Subject);
+                    WriteField("    Thumbprint", si.Certificate.ThumbprintSha256[..16] + "...");
+                    WriteField("    Valid To", $"{si.Certificate.ValidTo:yyyy-MM-dd} ({si.Certificate.DaysUntilExpiry} days)");
+                }
+                if (si.TlsProtocolVersion != null)
+                {
+                    WriteField("    TLS Version", si.TlsProtocolVersion);
+                }
+                if (!si.IsEncrypted)
+                {
+                    WriteColored("    [WARN] Connection via this SAN is NOT encrypted.", ConsoleColor.Yellow);
+                    Console.WriteLine();
+                }
+            }
+        }
+    }
 
     private static void WriteHeader(string title)
     {

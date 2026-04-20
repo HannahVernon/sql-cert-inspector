@@ -15,7 +15,9 @@
 │  2. Resolve server endpoint                                      │
 │  3. Connect and inspect                                          │
 │  4. Run Kerberos diagnostics                                     │
-│  5. Report results                                               │
+│  5. Cross-reference SANs with DNS/Kerberos                       │
+│  6. SAN connectivity tests (--test-san-connectivity)             │
+│  7. Report results                                               │
 └──────┬───────────┬──────────────┬──────────────┬─────────────────┘
        │           │              │              │
        ▼           ▼              ▼              ▼
@@ -46,7 +48,7 @@
 | File | Responsibility |
 |------|----------------|
 | `Program.cs` | Entry point. Parses CLI arguments via `System.CommandLine`, orchestrates the inspection pipeline, handles errors, and delegates to the appropriate reporter. |
-| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--output`, `--show-full-certificate-chain`, `--skip-kerberos`, `--encrypt-strict`, `--no-color`). |
+| `CommandLineOptions.cs` | POCO holding parsed CLI options (`--server`, `--port`, `--timeout`, `--json`, `--output`, `--show-full-certificate-chain`, `--skip-kerberos`, `--encrypt-strict`, `--full-spn-diagnostics`, `--test-san-connectivity`, `--no-color`). |
 | `ExitCodes.cs` | Constants for process exit codes (0–6). |
 | `ServerEndpointResolver.cs` | Parses the `--server` string into host, instance name, and port components. Validates conflicts between `--port` and port/instance in the server string. |
 | `DnsResolver.cs` | P/Invoke wrapper for `DnsQuery_W` (`dnsapi.dll`). Queries A, AAAA, and CNAME records and returns structured results with actual DNS record types. Detects DNS suffix expansion (short name → FQDN) vs true CNAME records. Windows-only. |
@@ -56,10 +58,10 @@
 | `TdsPreloginClient.cs` | Core inspection logic. Supports both TDS 7.x (PRELOGIN first, TLS wrapped in TDS packets) and TDS 8.0 Strict (TLS first on raw socket, PRELOGIN inside encrypted tunnel). Resolves hostname to IP addresses via DNS, races TCP connections in parallel when multiple IPs are returned (multi-subnet failover), and extracts the server certificate and TLS metadata. Throws `ProtocolMismatchException` when a protocol version mismatch is detected, enabling auto-fallback. |
 | `TdsProtocolVersion.cs` | Enum (`Tds7`, `Tds8Strict`) and display string extension method for the TDS protocol flow variant used. |
 | `CertificateInfo.cs` | Model class holding extracted certificate details, health warnings, and optional chain certificates. |
-| `ConnectionSecurityInfo.cs` | Model class holding connection metadata, TLS properties, TDS protocol version, fallback status, the certificate, and Kerberos diagnostics. |
-| `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms). Accepts an optional resolved FQDN to avoid false hostname mismatch warnings when a short (non-FQDN) name was used. Builds the certificate chain when requested. |
-| `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, DNS resolution, DNS record types, resolved FQDN, warnings, and `setspn` remediation commands). |
-| `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. By default, only checks port/instance-specific SPNs (used by TCP connections); portless base SPNs are included only with `--full-spn-diagnostics`. Suggests `setspn` remediation commands (FQDN-only) when SPNs are missing. Runs health checks for DNS mismatches, missing SPNs, and duplicate SPN registrations. Windows-only (`[SupportedOSPlatform("windows")]`). |
+| `ConnectionSecurityInfo.cs` | Model class holding connection metadata, TLS properties, TDS protocol version, fallback status, the certificate, Kerberos diagnostics, and SAN connectivity test results. |
+| `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms, CN-only certs, missing Server Authentication EKU). Cross-references SANs with DNS/Kerberos data (CNAME target in SANs, reverse DNS in SANs). Accepts an optional resolved FQDN to avoid false hostname mismatch warnings when a short (non-FQDN) name was used. Builds the certificate chain when requested. |
+| `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, SAN SPN coverage, DNS resolution, DNS record types, resolved FQDN, warnings, and `setspn` remediation commands). |
+| `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. By default, only checks port/instance-specific SPNs (used by TCP connections); portless base SPNs and SAN SPN coverage are included only with `--full-spn-diagnostics`. Suggests `setspn` remediation commands (FQDN-only) when SPNs are missing. Runs health checks for DNS mismatches, missing SPNs, duplicate SPN registrations, and uncovered SAN hostnames. Windows-only (`[SupportedOSPlatform("windows")]`). |
 | `ConsoleReporter.cs` | Renders results as colored plain text. Auto-detects redirected output and suppresses colors. Maps raw algorithm enum values to human-readable names. |
 | `JsonReporter.cs` | Renders results as indented JSON via `System.Text.Json`. Provides `GenerateJson()` for string output (used by `--output` file writing) and `Report()` for direct console output. Applies the same algorithm name mappings as the console reporter. |
 | `OutputFileHelper.cs` | Generates output filenames from `--server` values by replacing illegal filename characters (`\/:*?"<>\|`) with hyphens. |
@@ -111,6 +113,23 @@ Rather than shelling out to `setspn.exe`, the Kerberos inspector queries Active 
 - Faster (no process spawn)
 - More reliable (parses structured data, not command-line output)
 - Richer (returns the account name, object class, and distinguished name)
+
+### SAN Cross-Reference and Connectivity Testing
+
+After both certificate extraction and Kerberos inspection complete, the tool performs several cross-reference checks:
+
+**Default checks (always run when cert + Kerberos data available):**
+- **CN-only certificate** — warns if the certificate has no SANs, since modern TLS clients (per RFC 6125) may reject CN-only certificates
+- **Missing Server Authentication EKU** — warns if the EKU extension exists but doesn't include Server Authentication (OID 1.3.6.1.5.5.7.3.1)
+- **CNAME target not in SANs** — if a CNAME was detected in DNS, verifies the canonical hostname appears in the certificate's SANs
+- **Reverse DNS hostname not in SANs** — if reverse DNS returns a different hostname, checks whether it appears in the SANs
+
+**`--full-spn-diagnostics` checks:**
+- **SPN coverage per SAN** — for each DNS SAN hostname (excluding wildcards and the connection hostname), performs an LDAP lookup for `MSSQLSvc/<SAN>:<port>` to verify Kerberos would work for clients connecting via that name
+
+**`--test-san-connectivity` checks:**
+- **Full certificate inspection per SAN** — for each DNS SAN hostname (excluding wildcards and the connection hostname), performs a complete TDS PRELOGIN + TLS handshake and compares the served certificate with the primary certificate
+- **Recursion guard** — sub-inspections never trigger their own SAN connectivity tests, preventing infinite loops when certificates reference each other
 
 ### MinVer Versioning
 

@@ -235,4 +235,54 @@ public class KerberosHealthCheckTests
 
         Assert.Empty(diag.SuggestedSetspnCommands);
     }
+
+    [Fact]
+    public void SanSpnCoverage_MissingSpn_EmitsInfoWarning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql")
+            },
+            SanSpnCoverage = new List<SanSpnCheck>
+            {
+                new() { SanHostname = "listener.example.com", Spn = "MSSQLSvc/listener.example.com:1433", Found = false },
+                new() { SanHostname = "node2.example.com", Spn = "MSSQLSvc/node2.example.com:1433", Found = true, AccountName = "svc-sql" }
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Info &&
+            w.Message.Contains("listener.example.com") &&
+            w.Message.Contains("no SPN registered"));
+
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Message.Contains("node2.example.com"));
+    }
+
+    [Fact]
+    public void SanSpnCoverage_AllFound_NoWarnings()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql")
+            },
+            SanSpnCoverage = new List<SanSpnCheck>
+            {
+                new() { SanHostname = "listener.example.com", Spn = "MSSQLSvc/listener.example.com:1433", Found = true, AccountName = "svc-sql" }
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Message.Contains("no SPN registered"));
+    }
 }
