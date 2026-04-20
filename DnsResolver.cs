@@ -56,6 +56,15 @@ public static class DnsResolver
                 {
                     result.ResolvedFqdn = hostEntry.HostName;
                     result.WasSuffixExpanded = true;
+
+                    /* Identify which DNS suffix produced the match and check for ambiguity */
+                    var suffixes = GetDnsSuffixSearchList();
+                    result.ConfiguredSuffixes = suffixes;
+
+                    if (suffixes.Count > 0)
+                    {
+                        IdentifyUsedSuffix(hostname, result, suffixes);
+                    }
                 }
             }
             catch (System.Net.Sockets.SocketException)
@@ -65,6 +74,139 @@ public static class DnsResolver
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Retrieves the DNS suffix search list configured on this machine.
+    /// Checks the SearchList policy (GPO), then the DHCP/manual search list,
+    /// and falls back to the primary DNS suffix and per-adapter connection-specific suffixes.
+    /// </summary>
+    internal static List<string> GetDnsSuffixSearchList()
+    {
+        var suffixes = new List<string>();
+
+        try
+        {
+            /* GPO-configured search list takes priority */
+            using var policyKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient");
+            string? policyList = policyKey?.GetValue("SearchList") as string;
+            if (!string.IsNullOrWhiteSpace(policyList))
+            {
+                foreach (string s in policyList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (!suffixes.Contains(s, StringComparer.OrdinalIgnoreCase))
+                        suffixes.Add(s);
+                }
+                return suffixes;
+            }
+
+            /* Manual/DHCP search list */
+            using var tcpipKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters");
+            string? searchList = tcpipKey?.GetValue("SearchList") as string;
+            if (!string.IsNullOrWhiteSpace(searchList))
+            {
+                foreach (string s in searchList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (!suffixes.Contains(s, StringComparer.OrdinalIgnoreCase))
+                        suffixes.Add(s);
+                }
+                return suffixes;
+            }
+
+            /* Fall back to primary DNS suffix + connection-specific suffixes */
+            string? primaryDomain = tcpipKey?.GetValue("Domain") as string;
+            if (!string.IsNullOrWhiteSpace(primaryDomain))
+            {
+                suffixes.Add(primaryDomain);
+            }
+
+            /* Per-adapter connection-specific suffixes */
+            using var interfacesKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces");
+            if (interfacesKey != null)
+            {
+                foreach (string subKeyName in interfacesKey.GetSubKeyNames())
+                {
+                    using var adapterKey = interfacesKey.OpenSubKey(subKeyName);
+                    string? adapterDomain = adapterKey?.GetValue("Domain") as string;
+                    if (!string.IsNullOrWhiteSpace(adapterDomain) &&
+                        !suffixes.Contains(adapterDomain, StringComparer.OrdinalIgnoreCase))
+                    {
+                        suffixes.Add(adapterDomain);
+                    }
+
+                    string? dhcpDomain = adapterKey?.GetValue("DhcpDomain") as string;
+                    if (!string.IsNullOrWhiteSpace(dhcpDomain) &&
+                        !suffixes.Contains(dhcpDomain, StringComparer.OrdinalIgnoreCase))
+                    {
+                        suffixes.Add(dhcpDomain);
+                    }
+                }
+            }
+        }
+        catch (System.Security.SecurityException)
+        {
+            /* Registry access denied — return what we have */
+        }
+
+        return suffixes;
+    }
+
+    /// <summary>
+    /// Determines which DNS suffix produced the resolution and checks for ambiguity
+    /// (same short name resolving to different IPs via different suffixes).
+    /// </summary>
+    private static void IdentifyUsedSuffix(string shortName, DnsResult result, List<string> suffixes)
+    {
+        string? resolvedFqdn = result.ResolvedFqdn;
+        if (resolvedFqdn == null) return;
+
+        /* Identify the matching suffix from the resolved FQDN */
+        foreach (string suffix in suffixes)
+        {
+            string candidate = $"{shortName}.{suffix}";
+            if (string.Equals(candidate, resolvedFqdn, StringComparison.OrdinalIgnoreCase))
+            {
+                result.UsedSuffix = suffix;
+                break;
+            }
+        }
+
+        /* Check for ambiguity — try each other suffix and see if any resolves to different IPs */
+        if (suffixes.Count <= 1) return;
+
+        var resolvedIps = new HashSet<string>(result.Addresses, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string suffix in suffixes)
+        {
+            if (string.Equals(suffix, result.UsedSuffix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string candidate = $"{shortName}.{suffix}";
+            try
+            {
+                var addresses = Dns.GetHostAddresses(candidate);
+                if (addresses.Length > 0)
+                {
+                    var candidateIps = addresses.Select(a => a.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (!candidateIps.SetEquals(resolvedIps))
+                    {
+                        result.AmbiguousSuffixes.Add(new DnsSuffixMatch
+                        {
+                            Suffix = suffix,
+                            Fqdn = candidate,
+                            ResolvedIps = addresses.Select(a => a.ToString()).ToList()
+                        });
+                    }
+                }
+            }
+            catch (System.Net.Sockets.SocketException)
+            {
+                /* This suffix didn't resolve — not ambiguous */
+            }
+        }
     }
 
     private static void QueryRecords(string hostname, ushort recordType, DnsResult result)
@@ -245,6 +387,35 @@ public sealed class DnsResult
     /// </summary>
     public string? ResolvedFqdn { get; set; }
 
+    /// <summary>
+    /// The DNS suffix that produced the successful resolution. Null when suffix
+    /// expansion was not used or the matching suffix could not be identified.
+    /// </summary>
+    public string? UsedSuffix { get; set; }
+
+    /// <summary>
+    /// DNS suffixes configured on this machine (from GPO, DHCP, or adapter settings).
+    /// </summary>
+    public List<string> ConfiguredSuffixes { get; set; } = new();
+
+    /// <summary>
+    /// Other DNS suffixes that also resolve the short name but to different IP addresses.
+    /// Non-empty indicates an ambiguous short name that could connect to different servers
+    /// depending on DNS suffix order.
+    /// </summary>
+    public List<DnsSuffixMatch> AmbiguousSuffixes { get; set; } = new();
+
     /// <summary>Non-fatal errors encountered during DNS queries.</summary>
     public List<string> Errors { get; set; } = new();
+}
+
+/// <summary>
+/// Represents a DNS suffix that resolves a short name to a different set of IPs
+/// than the primary resolution, indicating potential ambiguity.
+/// </summary>
+public sealed class DnsSuffixMatch
+{
+    public string Suffix { get; set; } = string.Empty;
+    public string Fqdn { get; set; } = string.Empty;
+    public List<string> ResolvedIps { get; set; } = new();
 }

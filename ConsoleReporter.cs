@@ -192,7 +192,12 @@ public static class ConsoleReporter
             {
                 if (kerberos.ResolvedFqdn != null)
                 {
-                    WriteField("Resolved FQDN", kerberos.ResolvedFqdn);
+                    string fqdnDisplay = kerberos.ResolvedFqdn;
+                    if (kerberos.DnsSuffixUsed != null)
+                    {
+                        fqdnDisplay += $"  (via DNS suffix: {kerberos.DnsSuffixUsed})";
+                    }
+                    WriteField("Resolved FQDN", fqdnDisplay);
                 }
 
                 if (kerberos.DnsRecordTypes.Count > 0)

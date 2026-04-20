@@ -11,7 +11,7 @@ A command-line tool that inspects the TLS certificate and Kerberos configuration
 - **SAN cross-reference** — validates CNAME targets and reverse DNS hostnames appear in the certificate's SANs; optionally performs SPN lookups for each SAN hostname (`--full-spn-diagnostics`) and full certificate inspection for each SAN (`--test-san-connectivity`)
 - **Full certificate chain** — optionally display intermediate and root CA certificates
 - **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification, and `setspn` remediation commands when SPNs are missing
-- **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, avoiding false mismatch warnings
+- **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, with DNS suffix identification and ambiguity detection when multiple suffixes could resolve the same short name to different servers
 - **TDS 8.0 (Strict) support** — connect to servers using strict encryption (`--encrypt-strict` / `--tds8`) where TLS negotiation precedes all TDS traffic; auto-fallback between TDS 7.x and 8.0 with user guidance
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
 - **JSON output** — machine-readable output for scripting and automation
