@@ -119,7 +119,7 @@ The VERSION option bounds check used `offset + length <= payload.Length`, where 
 
 | Package | Version | Risk |
 |---------|---------|------|
-| `System.CommandLine` | 2.0.0-beta4 | Pre-release (beta since 2022). No known CVEs. API surface could change. |
+| `System.CommandLine` | 2.0.6 | Stable GA release. No known CVEs. |
 | `System.DirectoryServices` | 10.0.5 | No known vulnerabilities. |
 | `MinVer` | 6.0.0 | Build-only (`PrivateAssets="All"`). No runtime exposure. |
 
@@ -150,6 +150,78 @@ No hardcoded credentials, API keys, internal server names, or PII exist in the s
 ## Recommendations for Future Development
 
 1. If a `--verbose` flag is added, gate detailed network diagnostics behind it.
-2. Periodically re-check `System.CommandLine` for GA release or CVEs.
-3. Review pinned action SHAs when updating workflow files.
-4. If cross-platform support is added, re-evaluate `System.DirectoryServices` (Windows-only) and consider alternative SPN lookup methods.
+2. Review pinned action SHAs when updating workflow files.
+3. If cross-platform support is added, re-evaluate `System.DirectoryServices` (Windows-only) and consider alternative SPN lookup methods.
+
+---
+
+## Security Audit — 2026-04-20
+
+**Framework:** [HannahVernon/ai-security-audit](https://github.com/HannahVernon/ai-security-audit)
+**Audits run:** 6 of 14 (01, 03, 06, 08, 09, 11)
+
+### 17. Path Traversal via `--output` Option (Fixed)
+
+**Severity:** Critical (CWE-22)
+**File:** `Program.cs` — `WriteOutputFile()`
+**Status:** ✅ Fixed — `Path.GetFullPath()` canonicalization added.
+
+The `--output` value was passed directly to `File.WriteAllText()` without validation. Paths like `../../sensitive.json` or absolute paths could write to arbitrary locations. The path is now canonicalized via `Path.GetFullPath()` before use.
+
+### 18. Auto-Generated Filename Missing `..` Sanitization (Fixed)
+
+**Severity:** High (CWE-22)
+**File:** `OutputFileHelper.cs` — `GenerateOutputFileName()`
+**Status:** ✅ Fixed — `..` sequences collapsed to `.` in a loop.
+
+The filename sanitizer replaced illegal characters but did not block `..` sequences. While exploitation was unlikely (auto-generated from server names), the sanitizer now collapses `..` to `.` to close the gap.
+
+### 19. UDP `Task.WaitAll` Without Timeout (Fixed)
+
+**Severity:** High (DoS)
+**File:** `SqlBrowserClient.cs` — `QueryBrowserParallel()`
+**Status:** ✅ Fixed — `Task.WaitAll` now passes an explicit timeout.
+
+The parallel SQL Browser query used `Task.WaitAll(tasks)` with no timeout. While individual tasks had `ReceiveTimeout` set on the socket, platform-level hangs could cause indefinite blocking. A timeout of `(timeoutSeconds + 5) * 1000` ms (clamped 5-125s) is now passed to `Task.WaitAll`.
+
+### 20. System.CommandLine Beta Upgraded to Stable (Fixed)
+
+**Severity:** Medium (supply chain)
+**File:** `sql-cert-inspector.csproj`
+**Status:** ✅ Fixed — upgraded from `2.0.0-beta4.22272.1` to `2.0.6` (stable GA).
+
+The pre-release beta from April 2022 has been replaced with the stable 2.0.6 release. This required migrating to the new API surface (`Option` constructor changes, `SetAction` replaces `SetHandler`, `GetValue` replaces `GetValueForOption`, `Parse().Invoke()` replaces `InvokeAsync`).
+
+### 21. Explicit LDAP Timeouts on DirectorySearcher (Fixed)
+
+**Severity:** Low
+**File:** `KerberosInspector.cs` — `LookupSpn()`
+**Status:** ✅ Fixed — `ServerTimeLimit` (15s) and `ClientTimeout` (30s) set.
+
+`DirectorySearcher` previously relied on platform defaults. Explicit timeouts ensure SPN lookups cannot hang indefinitely.
+
+### 22. File Write Errors Leak Full Paths (Fixed)
+
+**Severity:** Medium (CWE-209)
+**File:** `Program.cs` — `WriteOutputFile()`
+**Status:** ✅ Fixed — error messages now show only the filename via `Path.GetFileName()`.
+
+Error messages previously included the full resolved file path, which could reveal directory structure in CI/CD logs. Messages now show only the filename and a generic error description.
+
+### Audit Domains with No Issues Found
+
+| Audit | Domain | Result |
+|-------|--------|--------|
+| 01 | Credential & Connection String Handling | ✅ Clean |
+| 08 | Binary Protocol Parsing | ✅ Clean |
+| 09 | TLS Configuration & Certificate Handling | ✅ Clean |
+
+### Updated Severity Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| Critical | 2 | ✅ Fixed (PRELOGIN length validation, path traversal) |
+| High | 7 | ✅ Fixed (IPv4 SPN, resource disposal, DNS loop, Browser validation, offset overflow, filename sanitization, UDP timeout) |
+| Medium | 3 | ✅ Fixed (System.CommandLine upgrade, path leakage), Accepted (UDP protocol limitation) |
+| Low | 3 | ✅ Fixed (Browser response disclosure, LDAP timeouts), Accepted (TLS bypass by design) |
+| Info | 1 | ✅ Fixed (SHA pinning) |

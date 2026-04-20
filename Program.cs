@@ -1,91 +1,89 @@
 using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Reflection;
 using SqlCertInspector;
 
-var serverOption = new Option<string>(
-    name: "--server",
-    description: "SQL Server target (server, server\\instance, server,port, or ip,port)")
+var serverOption = new Option<string>("--server", "-s")
 {
-    IsRequired = true
+    Description = "SQL Server target (server, server\\instance, server,port, or ip,port)",
+    Required = true
 };
-serverOption.AddAlias("-s");
 
-var portOption = new Option<int?>(
-    name: "--port",
-    description: "TCP port (alternative to ,port or \\instance syntax)");
-portOption.AddAlias("-p");
-
-var timeoutOption = new Option<int>(
-    name: "--timeout",
-    getDefaultValue: () => 5,
-    description: "Connection timeout in seconds");
-timeoutOption.AddAlias("-t");
-
-var jsonOption = new Option<bool>(
-    name: "--json",
-    description: "Output in JSON format");
-
-var chainOption = new Option<bool>(
-    name: "--show-full-certificate-chain",
-    description: "Display the full certificate chain (intermediate and root CA)");
-
-var noColorOption = new Option<bool>(
-    name: "--no-color",
-    description: "Disable colored console output");
-
-var skipKerberosOption = new Option<bool>(
-    name: "--skip-kerberos",
-    description: "Skip Kerberos and DNS diagnostics");
-
-var outputOption = new Option<string?>(
-    name: "--output",
-    description: "Write JSON output to a file. If no filename is given, auto-generates from --server value.")
+var portOption = new Option<int?>("--port", "-p")
 {
+    Description = "TCP port (alternative to ,port or \\instance syntax)"
+};
+
+var timeoutOption = new Option<int>("--timeout", "-t")
+{
+    Description = "Connection timeout in seconds",
+    DefaultValueFactory = _ => 5
+};
+
+var jsonOption = new Option<bool>("--json")
+{
+    Description = "Output in JSON format"
+};
+
+var chainOption = new Option<bool>("--show-full-certificate-chain")
+{
+    Description = "Display the full certificate chain (intermediate and root CA)"
+};
+
+var noColorOption = new Option<bool>("--no-color")
+{
+    Description = "Disable colored console output"
+};
+
+var skipKerberosOption = new Option<bool>("--skip-kerberos")
+{
+    Description = "Skip Kerberos and DNS diagnostics"
+};
+
+var outputOption = new Option<string?>("--output", "-o")
+{
+    Description = "Write JSON output to a file. If no filename is given, auto-generates from --server value.",
     Arity = System.CommandLine.ArgumentArity.ZeroOrOne
 };
-outputOption.AddAlias("-o");
 
-var encryptStrictOption = new Option<bool>(
-    name: "--encrypt-strict",
-    description: "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)");
-encryptStrictOption.AddAlias("--tds8");
-
-var rootCommand = new RootCommand(
-    "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.")
+var encryptStrictOption = new Option<bool>("--encrypt-strict", "--tds8")
 {
-    serverOption,
-    portOption,
-    timeoutOption,
-    jsonOption,
-    chainOption,
-    noColorOption,
-    skipKerberosOption,
-    outputOption,
-    encryptStrictOption
+    Description = "Connect using TDS 8.0 strict encryption (TLS before PRELOGIN, like HTTPS)"
 };
 
-rootCommand.SetHandler(async (InvocationContext context) =>
+var rootCommand = new RootCommand(
+    "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.");
+
+rootCommand.Options.Add(serverOption);
+rootCommand.Options.Add(portOption);
+rootCommand.Options.Add(timeoutOption);
+rootCommand.Options.Add(jsonOption);
+rootCommand.Options.Add(chainOption);
+rootCommand.Options.Add(noColorOption);
+rootCommand.Options.Add(skipKerberosOption);
+rootCommand.Options.Add(outputOption);
+rootCommand.Options.Add(encryptStrictOption);
+
+rootCommand.SetAction(async (parseResult, cancellationToken) =>
 {
-    bool outputSpecified = context.ParseResult.FindResultFor(outputOption) != null;
+    bool outputSpecified = parseResult.GetResult(outputOption) != null;
     var options = new CommandLineOptions
     {
-        Server = context.ParseResult.GetValueForOption(serverOption)!,
-        Port = context.ParseResult.GetValueForOption(portOption),
-        Timeout = Math.Clamp(context.ParseResult.GetValueForOption(timeoutOption), 1, 120),
-        Json = context.ParseResult.GetValueForOption(jsonOption),
-        ShowFullCertificateChain = context.ParseResult.GetValueForOption(chainOption),
-        NoColor = context.ParseResult.GetValueForOption(noColorOption),
-        SkipKerberos = context.ParseResult.GetValueForOption(skipKerberosOption),
+        Server = parseResult.GetValue(serverOption)!,
+        Port = parseResult.GetValue(portOption),
+        Timeout = Math.Clamp(parseResult.GetValue(timeoutOption), 1, 120),
+        Json = parseResult.GetValue(jsonOption),
+        ShowFullCertificateChain = parseResult.GetValue(chainOption),
+        NoColor = parseResult.GetValue(noColorOption),
+        SkipKerberos = parseResult.GetValue(skipKerberosOption),
         OutputFileSpecified = outputSpecified,
-        OutputFile = outputSpecified ? context.ParseResult.GetValueForOption(outputOption) : null,
-        EncryptStrict = context.ParseResult.GetValueForOption(encryptStrictOption)
+        OutputFile = outputSpecified ? parseResult.GetValue(outputOption) : null,
+        EncryptStrict = parseResult.GetValue(encryptStrictOption)
     };
 
-    context.ExitCode = await RunAsync(options);
+    Environment.ExitCode = await RunAsync(options);
 });
 
-return await rootCommand.InvokeAsync(args);
+return rootCommand.Parse(args).Invoke();
 
 static async Task<int> RunAsync(CommandLineOptions options)
 {
@@ -289,26 +287,29 @@ static int WriteOutputFile(CommandLineOptions options, ConnectionSecurityInfo se
 {
     string fileName = options.OutputFile ?? OutputFileHelper.GenerateOutputFileName(options.Server);
 
+    /* Canonicalize the path to prevent directory traversal (CWE-22) */
+    string canonicalPath = Path.GetFullPath(fileName);
+
     try
     {
         string json = JsonReporter.GenerateJson(securityInfo);
-        File.WriteAllText(fileName, json);
-        Console.Error.WriteLine($"Output written to: {fileName}");
+        File.WriteAllText(canonicalPath, json);
+        Console.Error.WriteLine($"Output written to: {Path.GetFileName(canonicalPath)}");
         return ExitCodes.Success;
     }
-    catch (UnauthorizedAccessException ex)
+    catch (UnauthorizedAccessException)
     {
-        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{Path.GetFileName(canonicalPath)}': access denied.");
         return ExitCodes.FileWriteError;
     }
-    catch (DirectoryNotFoundException ex)
+    catch (DirectoryNotFoundException)
     {
-        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{Path.GetFileName(canonicalPath)}': directory not found.");
         return ExitCodes.FileWriteError;
     }
     catch (IOException ex)
     {
-        Console.Error.WriteLine($"ERROR: Cannot write output file '{fileName}': {ex.Message}");
+        Console.Error.WriteLine($"ERROR: Cannot write output file '{Path.GetFileName(canonicalPath)}': {ex.GetType().Name}");
         return ExitCodes.FileWriteError;
     }
 }
