@@ -20,7 +20,7 @@ responsibly using one of the following methods:
    repository's **Security** tab and click **Report a vulnerability**. This
    ensures the report remains private until a fix is available.
 
-2. **Email:** Send a detailed report to <coc@mvct.com>.
+2. **Email:** Send a detailed report to <vuln@mvct.com>.
 
 Please include:
 
