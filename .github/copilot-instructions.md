@@ -9,7 +9,7 @@ Whenever you make a code change that affects any of the following, you **must** 
 | New/renamed/removed files or folders | `ARCHITECTURE.md` (file tree + relevant sections) |
 | New/changed CLI options or behavior | `README.md` |
 | Build requirements, project structure | `README.md`, `CONTRIBUTING.md` |
-| New NuGet dependencies | `licence.md` (package name, version, copyright, license) |
+| New NuGet dependencies | `LICENSE` (package name, version, copyright, license) |
 
 **Do not defer documentation updates to a follow-up commit.** Treat docs as part of the definition of done for every change.
 
