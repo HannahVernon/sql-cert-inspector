@@ -23,6 +23,14 @@ public static class OutputFileHelper
         }
 
         string sanitized = new string(result).Trim('-');
+
+        /* Collapse directory traversal sequences to prevent path escape (CWE-22) */
+        while (sanitized.Contains(".."))
+        {
+            sanitized = sanitized.Replace("..", ".");
+        }
+
+        sanitized = sanitized.Trim('-', '.');
         if (string.IsNullOrWhiteSpace(sanitized))
         {
             sanitized = "output";

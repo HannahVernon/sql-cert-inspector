@@ -201,7 +201,9 @@ public static class KerberosInspector
             {
                 Filter = $"(servicePrincipalName={EscapeLdapFilter(spn)})",
                 PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName" },
-                SearchScope = SearchScope.Subtree
+                SearchScope = SearchScope.Subtree,
+                ServerTimeLimit = TimeSpan.FromSeconds(15),
+                ClientTimeout = TimeSpan.FromSeconds(30)
             };
 
             var searchResult = searcher.FindOne();

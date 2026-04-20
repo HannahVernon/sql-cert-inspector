@@ -31,7 +31,7 @@ under open-source licenses compatible with the MIT license.
 
 | Package | Version | Copyright |
 |---------|---------|-----------|
-| [System.CommandLine](https://github.com/dotnet/command-line-api) | 2.0.0-beta4 | © .NET Foundation |
+| [System.CommandLine](https://github.com/dotnet/command-line-api) | 2.0.6 | © Microsoft Corporation |
 | [MinVer](https://github.com/adamralph/minver) | 6.0.0 | © Adam Ralph |
 
 ### MIT License (Microsoft)
