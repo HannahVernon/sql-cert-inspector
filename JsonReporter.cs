@@ -107,6 +107,16 @@ public static class JsonReporter
                 {
                     RequestedHostname = info.Kerberos.RequestedHostname,
                     ResolvedFqdn = info.Kerberos.ResolvedFqdn,
+                    DnsSuffixUsed = info.Kerberos.DnsSuffixUsed,
+                    ConfiguredDnsSuffixes = info.Kerberos.ConfiguredDnsSuffixes.Count > 0 ? info.Kerberos.ConfiguredDnsSuffixes : null,
+                    AmbiguousSuffixes = info.Kerberos.AmbiguousSuffixes.Count > 0
+                        ? info.Kerberos.AmbiguousSuffixes.Select(a => new AmbiguousSuffixJson
+                        {
+                            Suffix = a.Suffix,
+                            Fqdn = a.Fqdn,
+                            ResolvedIps = a.ResolvedIps
+                        }).ToList()
+                        : null,
                     DnsRecordTypes = info.Kerberos.DnsRecordTypes.Count > 0 ? info.Kerberos.DnsRecordTypes : null,
                     ResolvedIpAddresses = info.Kerberos.ResolvedIpAddresses.Count > 0 ? info.Kerberos.ResolvedIpAddresses : null,
                     ReverseHostname = info.Kerberos.ReverseHostname,
@@ -293,12 +303,22 @@ public static class JsonReporter
     {
         public string RequestedHostname { get; set; } = string.Empty;
         public string? ResolvedFqdn { get; set; }
+        public string? DnsSuffixUsed { get; set; }
+        public List<string>? ConfiguredDnsSuffixes { get; set; }
+        public List<AmbiguousSuffixJson>? AmbiguousSuffixes { get; set; }
         public List<string>? DnsRecordTypes { get; set; }
         public List<string>? ResolvedIpAddresses { get; set; }
         public string? ReverseHostname { get; set; }
         public bool ForwardReverseMismatch { get; set; }
         public string? CnameTarget { get; set; }
         public string? DnsError { get; set; }
+    }
+
+    private sealed class AmbiguousSuffixJson
+    {
+        public string Suffix { get; set; } = string.Empty;
+        public string Fqdn { get; set; } = string.Empty;
+        public List<string> ResolvedIps { get; set; } = new();
     }
 
     private sealed class SpnJson

@@ -164,6 +164,9 @@ public static class KerberosInspector
         if (dnsResult.WasSuffixExpanded && dnsResult.ResolvedFqdn != null)
         {
             diag.ResolvedFqdn = dnsResult.ResolvedFqdn;
+            diag.DnsSuffixUsed = dnsResult.UsedSuffix;
+            diag.ConfiguredDnsSuffixes = dnsResult.ConfiguredSuffixes;
+            diag.AmbiguousSuffixes = dnsResult.AmbiguousSuffixes;
         }
 
         if (dnsResult.Addresses.Count == 0 && dnsResult.Errors.Count == 0)
@@ -304,6 +307,18 @@ public static class KerberosInspector
                 $"Forward/reverse DNS mismatch. '{diag.RequestedHostname}' resolves to " +
                 $"{string.Join(", ", diag.ResolvedIpAddresses)}, but reverse lookup returns " +
                 $"'{diag.ReverseHostname}'. Kerberos authentication may fail."));
+        }
+
+        /* DNS suffix ambiguity */
+        if (diag.AmbiguousSuffixes.Count > 0)
+        {
+            foreach (var ambiguous in diag.AmbiguousSuffixes)
+            {
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                    $"Short name '{diag.RequestedHostname}' also resolves via suffix '{ambiguous.Suffix}' " +
+                    $"to {ambiguous.Fqdn} ({string.Join(", ", ambiguous.ResolvedIps)}), which differs " +
+                    $"from the primary resolution. Use a fully-qualified hostname to avoid ambiguity."));
+            }
         }
 
         if (diag.CnameTarget != null)

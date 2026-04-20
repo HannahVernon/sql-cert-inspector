@@ -12,6 +12,9 @@ public sealed class KerberosDiagnostics
     public bool ForwardReverseMismatch { get; set; }
     public string? CnameTarget { get; set; }
     public string? ResolvedFqdn { get; set; }
+    public string? DnsSuffixUsed { get; set; }
+    public List<string> ConfiguredDnsSuffixes { get; set; } = new();
+    public List<DnsSuffixMatch> AmbiguousSuffixes { get; set; } = new();
     public List<string> DnsRecordTypes { get; set; } = new();
     public string? DnsError { get; set; }
 
