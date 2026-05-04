@@ -755,6 +755,7 @@ function Build-HtmlReport {
       , [TimeSpan]$ElapsedTime
     )
 
+    Write-Verbose "Build-HtmlReport: $($Results.Count) result(s), generating report..."
     $totalServers = $Results.Count
     $criticalCount = @($Results | Where-Object { $_.Status -eq 'Critical' }).Count
     $warningCount = @($Results | Where-Object { $_.Status -eq 'Warning' }).Count
@@ -808,6 +809,7 @@ function Build-HtmlReport {
 
     $summaryRows = [System.Text.StringBuilder]::new()
     foreach ($r in $Results) {
+        Write-Verbose "  Summary row: $($r.ServerName) [$($r.Status)]"
         $statusEmoji = Get-StatusEmoji -Status $r.Status
         $statusClass = "status-$($r.Status.ToLower())"
         $statusText = Get-StatusText -Status $r.Status
@@ -831,6 +833,7 @@ function Build-HtmlReport {
 
     $detailSections = [System.Text.StringBuilder]::new()
     foreach ($r in $Results) {
+        Write-Verbose "  Detail section: $($r.ServerName)"
         $statusEmoji = Get-StatusEmoji -Status $r.Status
         $statusText = Get-StatusText -Status $r.Status
         $serverEnc = [System.Web.HttpUtility]::HtmlEncode($r.ServerName)
@@ -857,8 +860,10 @@ function Build-HtmlReport {
 
         if ($r.JsonResult) {
             $json = $r.JsonResult
+            Write-Verbose "    Processing JSON sections for $($r.ServerName)..."
 
             if ($json.PSObject.Properties.Name -contains 'connection' -and $json.connection) {
+                Write-Verbose "      Connection details section"
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Connection Details</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
@@ -882,6 +887,7 @@ function Build-HtmlReport {
             }
 
             if ($json.PSObject.Properties.Name -contains 'certificate' -and $json.certificate) {
+                Write-Verbose "      Certificate details section"
                 $c = $json.certificate
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Certificate Details</h4>")
@@ -913,6 +919,7 @@ function Build-HtmlReport {
             }
 
             if ($json.PSObject.Properties.Name -contains 'tls' -and $json.tls) {
+                Write-Verbose "      TLS section"
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>TLS Connection Security</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
@@ -932,6 +939,7 @@ function Build-HtmlReport {
             }
 
             if ($json.PSObject.Properties.Name -contains 'warnings' -and $json.warnings -and $json.warnings.Count -gt 0) {
+                Write-Verbose "      Warnings section"
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Warnings</h4>")
                 [void]$detailSections.AppendLine("            <ul class=`"warning-list`">")
@@ -943,6 +951,7 @@ function Build-HtmlReport {
             }
 
             if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'dns' -and $json.kerberos.dns) {
+                Write-Verbose "      DNS section"
                 $dns = $json.kerberos.dns
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>DNS Resolution</h4>")
@@ -965,7 +974,8 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'spns' -and $json.kerberos.spns -and $json.kerberos.spns.Count -gt 0) {
+            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'spns' -and $json.kerberos.spns -and @($json.kerberos.spns).Count -gt 0) {
+                Write-Verbose "      SPN section"
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Kerberos SPN Registration</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
@@ -1149,6 +1159,7 @@ if (-not (Test-Path $exeFullPath)) {
 }
 
 $servers = Read-ServerList -Path $inputFileResolved
+Write-Verbose "Loaded $($servers.Count) server(s) from $inputFileResolved"
 
 if ($WhatIfPreference) {
     Write-Host ''
@@ -1202,6 +1213,7 @@ foreach ($server in $servers) {
 
     $inspectArgs = Build-InspectorArgs -Server $server -GlobalTimeout $Timeout -IncludeJson
     $displayCmd = Format-DisplayCommandLine -ExeFullPath $exeFullPath -Server $server -GlobalTimeout $Timeout
+    Write-Verbose "Command: $displayCmd"
 
     $stdOut = ''
     $stdErr = ''
@@ -1248,15 +1260,20 @@ foreach ($server in $servers) {
     if ($exitCode -eq 0 -and $stdOut) {
         try {
             $jsonResult = $stdOut | ConvertFrom-Json
+            Write-Verbose "JSON parsed successfully for $($server.ServerName)"
         }
         catch {
             $stdErr = "Failed to parse JSON output: $($_.Exception.Message)"
             $exitCode = 5
         }
     }
+    else {
+        Write-Verbose "Skipping JSON parse for $($server.ServerName): exitCode=$exitCode, stdOut length=$($stdOut.Length)"
+    }
 
     $status = Get-HealthStatus -JsonResult $jsonResult -ExitCode $exitCode
     $issues = Get-IssueList -JsonResult $jsonResult -ExitCode $exitCode -StdErr $stdErr
+    Write-Verbose "Status: $status, Issues: $(@($issues).Count)"
 
     $statusColor = switch ($status) {
         'Critical' { 'Red' }
@@ -1281,7 +1298,9 @@ foreach ($server in $servers) {
 $stopwatch.Stop()
 Write-Host ''
 
+Write-Verbose "Building HTML report..."
 $html = Build-HtmlReport -Results $results -ExeFullPath $exeFullPath -GlobalTimeout $Timeout -ToolVersion $toolVersion -ElapsedTime $stopwatch.Elapsed
+Write-Verbose "HTML report built ($($html.Length) chars)"
 
 if ($OutputPath) {
     $outputResolved = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location) $OutputPath }
