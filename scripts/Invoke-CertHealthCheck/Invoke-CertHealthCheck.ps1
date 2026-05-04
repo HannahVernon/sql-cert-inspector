@@ -288,13 +288,15 @@ function Send-SmtpEmail {
     foreach ($addr in ($Config.toAddress -split ';' | Where-Object { $_.Trim() })) {
         $message.To.Add($addr.Trim())
     }
-    if ($Config.ccAddress) {
-        foreach ($addr in ($Config.ccAddress -split ';' | Where-Object { $_.Trim() })) {
+    $ccAddr = Get-SafeProperty $Config 'ccAddress'
+    if ($ccAddr) {
+        foreach ($addr in ($ccAddr -split ';' | Where-Object { $_.Trim() })) {
             $message.CC.Add($addr.Trim())
         }
     }
-    if ($Config.bccAddress) {
-        foreach ($addr in ($Config.bccAddress -split ';' | Where-Object { $_.Trim() })) {
+    $bccAddr = Get-SafeProperty $Config 'bccAddress'
+    if ($bccAddr) {
+        foreach ($addr in ($bccAddr -split ';' | Where-Object { $_.Trim() })) {
             $message.Bcc.Add($addr.Trim())
         }
     }
@@ -657,10 +659,10 @@ function Get-HealthStatus {
     }
 
     if ($JsonResult.PSObject.Properties.Name -contains 'warnings' -and $JsonResult.warnings) {
-        $issues += $JsonResult.warnings | ForEach-Object { $_.message }
+        $issues += $JsonResult.warnings | ForEach-Object { Get-SafeProperty $_ 'message' }
     }
 
-    if ($issues.Count -gt 0) {
+    if (@($issues).Count -gt 0) {
         return 'Warning'
     }
 
@@ -962,13 +964,15 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.PSObject.Properties.Name -contains 'warnings' -and $json.warnings -and $json.warnings.Count -gt 0) {
+            if ($json.PSObject.Properties.Name -contains 'warnings' -and $json.warnings -and @($json.warnings).Count -gt 0) {
                 Write-Verbose "      Warnings section"
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Warnings</h4>")
                 [void]$detailSections.AppendLine("            <ul class=`"warning-list`">")
                 foreach ($w in $json.warnings) {
-                    [void]$detailSections.AppendLine("                <li><strong>[$($w.severity)]</strong> $([System.Web.HttpUtility]::HtmlEncode($w.message))</li>")
+                    $wSeverity = Get-SafeProperty $w 'severity'
+                    $wMessage = Get-SafeProperty $w 'message'
+                    [void]$detailSections.AppendLine("                <li><strong>[$wSeverity]</strong> $([System.Web.HttpUtility]::HtmlEncode($wMessage))</li>")
                 }
                 [void]$detailSections.AppendLine("            </ul>")
                 [void]$detailSections.AppendLine("        </div>")
@@ -1347,7 +1351,7 @@ if ($shouldSendEmail) {
     $smtpConfig = Get-SmtpConfig
     if ($smtpConfig) {
         $smtpPassword = $null
-        if ($smtpConfig.useAuthentication) {
+        if (Get-SafeProperty $smtpConfig 'useAuthentication') {
             $smtpPassword = Get-StoredCredential -Target $script:CredentialTarget
             if (-not $smtpPassword) {
                 Write-Warning "SMTP authentication is enabled but no credential found in Credential Manager (target: $($script:CredentialTarget)). Run -Setup to configure. Skipping email."
@@ -1359,7 +1363,7 @@ if ($shouldSendEmail) {
             $emailSubject = Build-EmailSubject -Results $results
             try {
                 Send-SmtpEmail -Config $smtpConfig -Subject $emailSubject -Body $html -Password $smtpPassword
-                Write-Host "Email sent: $($smtpConfig.toAddress)" -ForegroundColor Green
+                Write-Host "Email sent: $(Get-SafeProperty $smtpConfig 'toAddress')" -ForegroundColor Green
             }
             catch {
                 Write-Warning "Failed to send email: $($_.Exception.Message)"
