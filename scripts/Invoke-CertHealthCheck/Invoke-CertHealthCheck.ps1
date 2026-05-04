@@ -812,11 +812,11 @@ function Build-HtmlReport {
         $statusClass = "status-$($r.Status.ToLower())"
         $statusText = Get-StatusText -Status $r.Status
 
-        $certSubject = if ($r.JsonResult -and $r.JsonResult.certificate) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.certificate.subject) } else { '—' }
-        $expiryDate = if ($r.JsonResult -and $r.JsonResult.certificate) { $r.JsonResult.certificate.validTo.ToString('yyyy-MM-dd') } else { '—' }
-        $daysLeft = if ($r.JsonResult -and $r.JsonResult.certificate) { $r.JsonResult.certificate.daysUntilExpiry } else { '—' }
-        $tlsVersion = if ($r.JsonResult -and $r.JsonResult.tls) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.tls.protocol) } else { '—' }
-        $issueCount = $r.Issues.Count
+        $certSubject = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.certificate.subject) } else { '—' }
+        $expiryDate = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { $r.JsonResult.certificate.validTo.ToString('yyyy-MM-dd') } else { '—' }
+        $daysLeft = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { $r.JsonResult.certificate.daysUntilExpiry } else { '—' }
+        $tlsVersion = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'tls') -and $r.JsonResult.tls) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.tls.protocol) } else { '—' }
+        $issueCount = @($r.Issues).Count
 
         [void]$summaryRows.AppendLine("        <tr>")
         [void]$summaryRows.AppendLine("            <td>$([System.Web.HttpUtility]::HtmlEncode($r.ServerName))</td>")
@@ -844,7 +844,7 @@ function Build-HtmlReport {
         [void]$detailSections.AppendLine("            <div class=`"cmd-line`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
         [void]$detailSections.AppendLine("        </div>")
 
-        if ($r.Issues.Count -gt 0) {
+        if (@($r.Issues).Count -gt 0) {
             [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
             [void]$detailSections.AppendLine("            <h4>Issues</h4>")
             [void]$detailSections.AppendLine("            <ul class=`"issue-list`">")
@@ -904,7 +904,7 @@ function Build-HtmlReport {
                         [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
                     }
                 }
-                if ($c.subjectAlternativeNames -and $c.subjectAlternativeNames.Count -gt 0) {
+                if (($c.PSObject.Properties.Name -contains 'subjectAlternativeNames') -and $c.subjectAlternativeNames -and @($c.subjectAlternativeNames).Count -gt 0) {
                     $sanHtml = ($c.subjectAlternativeNames | ForEach-Object { "<li>$([System.Web.HttpUtility]::HtmlEncode($_))</li>" }) -join ''
                     [void]$detailSections.AppendLine("            <tr><td>SANs</td><td><ul class=`"san-list`">$sanHtml</ul></td></tr>")
                 }
@@ -1270,7 +1270,7 @@ foreach ($server in $servers) {
     $results += [PSCustomObject]@{
         ServerName  = $server.ServerName
         Status      = $status
-        Issues      = $issues
+        Issues      = @($issues)
         JsonResult  = $jsonResult
         ExitCode    = $exitCode
         RawOutput   = if (-not $jsonResult) { "$stdOut`n$stdErr".Trim() } else { $null }
