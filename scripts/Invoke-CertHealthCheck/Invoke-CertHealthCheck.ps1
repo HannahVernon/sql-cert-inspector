@@ -307,17 +307,32 @@ function Get-MachineFqdn {
 
 #region Setup Mode
 
-function Invoke-SmtpSetup {
+function Invoke-Setup {
     <#
     .SYNOPSIS
-        Interactive SMTP configuration wizard.
+        Interactive configuration wizard for exe path and SMTP email settings.
     #>
     Write-Host ''
-    Write-Host '=== SMTP Configuration Setup ===' -ForegroundColor Cyan
+    Write-Host '=== Invoke-CertHealthCheck Configuration Setup ===' -ForegroundColor Cyan
     Write-Host ''
 
     $existing = Get-SmtpConfig
 
+    Write-Host '--- sql-cert-inspector Location ---' -ForegroundColor White
+    $exePathDefault = if ($existing -and $existing.exePath) { $existing.exePath } else { '.' }
+    $exePathInput = Read-HostWithDefault -Prompt 'Directory containing sql-cert-inspector.exe' -Default $exePathDefault
+    $exePathResolved = if ([System.IO.Path]::IsPathRooted($exePathInput)) { $exePathInput } else { Join-Path (Get-Location) $exePathInput }
+    $testExe = Join-Path $exePathResolved 'sql-cert-inspector.exe'
+    if (Test-Path $testExe) {
+        Write-Host "  Found: $testExe" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  WARNING: sql-cert-inspector.exe not found at $testExe" -ForegroundColor Yellow
+        Write-Host "  You can fix this later by re-running -Setup or using the -ExePath parameter." -ForegroundColor Yellow
+    }
+
+    Write-Host ''
+    Write-Host '--- SMTP Email Configuration ---' -ForegroundColor White
     $smtpServer = Read-HostWithDefault -Prompt 'SMTP Server' -Default $(if ($existing) { $existing.smtpServer } else { '' })
     $smtpPort = Read-HostWithDefault -Prompt 'SMTP Port' -Default $(if ($existing) { [string]$existing.smtpPort } else { '587' })
     $enableTlsStr = Read-HostWithDefault -Prompt 'Enable TLS (true/false)' -Default $(if ($existing) { [string]$existing.enableTls } else { 'true' })
@@ -339,6 +354,7 @@ function Invoke-SmtpSetup {
     }
 
     $config = [PSCustomObject]@{
+        exePath           = $exePathInput
         smtpServer        = $smtpServer
         smtpPort          = [int]$smtpPort
         enableTls         = $enableTls
@@ -412,7 +428,7 @@ function Invoke-SmtpSetup {
     }
 
     Write-Host ''
-    Write-Host 'SMTP setup complete.' -ForegroundColor Cyan
+    Write-Host 'Setup complete.' -ForegroundColor Cyan
 }
 
 #endregion
@@ -1055,7 +1071,7 @@ function Build-EmailSubject {
 #region Main Execution
 
 if ($Setup) {
-    Invoke-SmtpSetup
+    Invoke-Setup
     return
 }
 
@@ -1100,7 +1116,15 @@ if (-not $nonCommentLines -or $nonCommentLines.Count -lt 2) {
     exit 1
 }
 
-$exeDir = if ([System.IO.Path]::IsPathRooted($ExePath)) { $ExePath } else { Join-Path (Get-Location) $ExePath }
+$effectiveExePath = $ExePath
+if ($effectiveExePath -eq '.' -and -not $PSBoundParameters.ContainsKey('ExePath')) {
+    $savedConfig = Get-SmtpConfig
+    if ($savedConfig -and $savedConfig.exePath) {
+        $effectiveExePath = $savedConfig.exePath
+    }
+}
+
+$exeDir = if ([System.IO.Path]::IsPathRooted($effectiveExePath)) { $effectiveExePath } else { Join-Path (Get-Location) $effectiveExePath }
 $exeFullPath = Join-Path $exeDir 'sql-cert-inspector.exe'
 
 if (-not (Test-Path $exeFullPath)) {
