@@ -135,7 +135,7 @@ public sealed class TdsPreloginClient : IDisposable
         info.IsEncrypted = true;
 
         /* Perform TLS handshake wrapped in TDS PRELOGIN packets */
-        var tdsStream = new TdsPreloginStream(_networkStream);
+        using var tdsStream = new TdsPreloginStream(_networkStream);
         using var sslStream = new SslStream(
             tdsStream,
             leaveInnerStreamOpen: true,
@@ -521,7 +521,7 @@ public sealed class TdsPreloginClient : IDisposable
 
         /* Parse VERSION */
         if (options.TryGetValue(TokenVersion, out var ver) && ver.length >= 6 &&
-            ver.offset >= 0 && ver.offset <= payload.Length - ver.length)
+            ver.offset >= 0 && ver.offset + ver.length <= payload.Length)
         {
             int major = payload[ver.offset];
             int minor = payload[ver.offset + 1];
@@ -534,7 +534,7 @@ public sealed class TdsPreloginClient : IDisposable
 
         /* Parse ENCRYPTION */
         if (options.TryGetValue(TokenEncryption, out var enc) && enc.length >= 1 &&
-            enc.offset >= 0 && enc.offset < payload.Length)
+            enc.offset >= 0 && enc.offset + enc.length <= payload.Length)
         {
             byte encVal = payload[enc.offset];
             info.EncryptionMode = encVal switch

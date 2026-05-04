@@ -1,0 +1,4 @@
+server-name|port|tds-version|full-spn-diagnostics|test-san-connectivity|timeout
+# myserver\SQLEXPRESS|1434||||
+# myserver2.example.com||tds8|true|true|
+# myserver3||||||15
