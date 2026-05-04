@@ -506,8 +506,15 @@ function Read-ServerList {
     <#
     .SYNOPSIS
         Parses the pipe-delimited input file into an array of server objects.
+        Validates all fields defensively and skips malformed lines with warnings.
     #>
     param ([string]$Path)
+
+    $maxLineLength = 1024
+    $maxServerNameLength = 255
+    $validTdsVersions = @('', 'tds7', 'tds8')
+    # Hostname chars: alphanumeric, dots, hyphens, backslash (for instances), underscores
+    $validServerNamePattern = '^[a-zA-Z0-9._\\-]+$'
 
     $lines = Get-Content -Path $Path -Encoding UTF8
 
@@ -528,51 +535,98 @@ function Read-ServerList {
     $servers = @()
     $seen = @{}
     $lineNum = 0
+    $skippedCount = 0
 
     foreach ($line in ($dataLines | Select-Object -Skip 1)) {
         $lineNum++
-        $parts = $line.Split('|')
-        if ($parts.Count -lt 1 -or [string]::IsNullOrWhiteSpace($parts[0])) {
-            Write-Warning "Skipping line $lineNum — missing server-name."
-            continue
-        }
 
-        $portValue = 0
-        if ($parts.Count -gt 1 -and $parts[1].Trim()) {
-            $portParsed = 0
-            if (-not [int]::TryParse($parts[1].Trim(), [ref]$portParsed) -or $portParsed -lt 0 -or $portParsed -gt 65535) {
-                Write-Warning "Skipping line $lineNum — invalid port '$($parts[1].Trim())' for server '$($parts[0].Trim())'."
+        try {
+            if ($line.Length -gt $maxLineLength) {
+                Write-Warning "Skipping line $lineNum — exceeds maximum length of $maxLineLength characters ($($line.Length) chars)."
+                $skippedCount++
                 continue
             }
-            $portValue = $portParsed
-        }
 
-        $timeoutValue = 0
-        if ($parts.Count -gt 5 -and $parts[5].Trim()) {
-            $timeoutParsed = 0
-            if (-not [int]::TryParse($parts[5].Trim(), [ref]$timeoutParsed) -or $timeoutParsed -lt 0) {
-                Write-Warning "Skipping line $lineNum — invalid timeout '$($parts[5].Trim())' for server '$($parts[0].Trim())'."
+            $parts = $line.Split('|')
+            if ($parts.Count -lt 1 -or [string]::IsNullOrWhiteSpace($parts[0])) {
+                Write-Warning "Skipping line $lineNum — missing server-name."
+                $skippedCount++
                 continue
             }
-            $timeoutValue = $timeoutParsed
-        }
 
-        $entry = [PSCustomObject]@{
-            ServerName          = $parts[0].Trim()
-            Port                = $portValue
-            TdsVersion          = if ($parts.Count -gt 2) { $parts[2].Trim() } else { '' }
-            FullSpnDiagnostics  = if ($parts.Count -gt 3 -and $parts[3].Trim() -match '^(true|yes|1)$') { $true } else { $false }
-            TestSanConnectivity = if ($parts.Count -gt 4 -and $parts[4].Trim() -match '^(true|yes|1)$') { $true } else { $false }
-            Timeout             = $timeoutValue
-        }
+            $serverName = $parts[0].Trim()
 
-        $key = "$($entry.ServerName)|$($entry.Port)|$($entry.TdsVersion)|$($entry.FullSpnDiagnostics)|$($entry.TestSanConnectivity)|$($entry.Timeout)"
-        if ($seen.ContainsKey($key)) {
-            Write-Warning "Duplicate entry skipped: $($entry.ServerName) (all columns identical)."
+            if ($serverName.Length -gt $maxServerNameLength) {
+                Write-Warning "Skipping line $lineNum — server name exceeds $maxServerNameLength characters."
+                $skippedCount++
+                continue
+            }
+
+            if ($serverName -notmatch $validServerNamePattern) {
+                Write-Warning "Skipping line $lineNum — server name '$serverName' contains invalid characters (spaces, semicolons, brackets, etc. are not allowed)."
+                $skippedCount++
+                continue
+            }
+
+            $portValue = 0
+            if ($parts.Count -gt 1 -and $parts[1].Trim()) {
+                $portParsed = 0
+                if (-not [int]::TryParse($parts[1].Trim(), [ref]$portParsed) -or $portParsed -lt 0 -or $portParsed -gt 65535) {
+                    Write-Warning "Skipping line $lineNum — invalid port '$($parts[1].Trim())' for server '$serverName'. Must be 0-65535."
+                    $skippedCount++
+                    continue
+                }
+                $portValue = $portParsed
+            }
+
+            $tdsVersion = ''
+            if ($parts.Count -gt 2 -and $parts[2].Trim()) {
+                $tdsVersion = $parts[2].Trim().ToLower()
+                if ($tdsVersion -notin $validTdsVersions) {
+                    Write-Warning "Skipping line $lineNum — invalid tds-version '$($parts[2].Trim())' for server '$serverName'. Valid values: tds7, tds8, or blank."
+                    $skippedCount++
+                    continue
+                }
+            }
+
+            $timeoutValue = 0
+            if ($parts.Count -gt 5 -and $parts[5].Trim()) {
+                $timeoutParsed = 0
+                if (-not [int]::TryParse($parts[5].Trim(), [ref]$timeoutParsed) -or $timeoutParsed -lt 0 -or $timeoutParsed -gt 300) {
+                    Write-Warning "Skipping line $lineNum — invalid timeout '$($parts[5].Trim())' for server '$serverName'. Must be 0-300."
+                    $skippedCount++
+                    continue
+                }
+                $timeoutValue = $timeoutParsed
+            }
+
+            $entry = [PSCustomObject]@{
+                ServerName          = $serverName
+                Port                = $portValue
+                TdsVersion          = $tdsVersion
+                FullSpnDiagnostics  = if ($parts.Count -gt 3 -and $parts[3].Trim() -match '^(true|yes|1)$') { $true } else { $false }
+                TestSanConnectivity = if ($parts.Count -gt 4 -and $parts[4].Trim() -match '^(true|yes|1)$') { $true } else { $false }
+                Timeout             = $timeoutValue
+            }
+
+            $key = "$($entry.ServerName)|$($entry.Port)|$($entry.TdsVersion)|$($entry.FullSpnDiagnostics)|$($entry.TestSanConnectivity)|$($entry.Timeout)"
+            if ($seen.ContainsKey($key)) {
+                Write-Warning "Duplicate entry skipped: $serverName (all columns identical)."
+                $skippedCount++
+                continue
+            }
+            $seen[$key] = $true
+            $servers += $entry
+        }
+        catch {
+            Write-Warning "Skipping line $lineNum — unexpected parse error: $($_.Exception.Message)"
+            $skippedCount++
             continue
         }
-        $seen[$key] = $true
-        $servers += $entry
+    }
+
+    if ($skippedCount -gt 0) {
+        Write-Warning "$skippedCount line(s) skipped due to validation errors."
     }
 
     if ($servers.Count -eq 0) {
