@@ -1004,7 +1004,7 @@ function Build-HtmlReport {
     .status-warning { color: #ca8a04; font-weight: bold; }
     .status-healthy { color: #16a34a; font-weight: bold; }
     .status-error { color: #6b7280; font-weight: bold; }
-    details { margin: 8px 0; background: white; border: 1px solid #e2e8f0; border-radius: 6px; }
+    details { margin: 8px 0; background: white; border: 1px solid #e2e8f0; border-radius: 6px; border-left: 4px solid #dc2626; }
     summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 14px; background: #f8fafc; border-radius: 6px; }
     summary:hover { background: #f1f5f9; }
     .detail-body { padding: 16px; }
@@ -1073,11 +1073,6 @@ function Build-HtmlReport {
         [void]$detailSections.AppendLine("<details>")
         [void]$detailSections.AppendLine("    <summary>$statusEmoji $serverEnc — $statusText</summary>")
         [void]$detailSections.AppendLine("    <div class=`"detail-body`">")
-
-        [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-        [void]$detailSections.AppendLine("            <h4>Command Line</h4>")
-        [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
-        [void]$detailSections.AppendLine("        </div>")
 
         if (@($r.Issues).Count -gt 0) {
             [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
@@ -1232,6 +1227,11 @@ function Build-HtmlReport {
             [void]$detailSections.AppendLine("        </div>")
         }
 
+        [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+        [void]$detailSections.AppendLine("            <h4>Command Line</h4>")
+        [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
+        [void]$detailSections.AppendLine("        </div>")
+
         [void]$detailSections.AppendLine("    </div>")
         [void]$detailSections.AppendLine("</details>")
     }
@@ -1277,7 +1277,7 @@ $($summaryRows.ToString())
     </table>
 
     <div style="padding: 20px 30px;">
-        <h2 style="font-size: 18px; color: #1e40af; margin-bottom: 12px;">Server Details</h2>
+        <h2 style="font-size: 18px; color: #1e40af; margin-bottom: 12px;">Non-Healthy Servers</h2>
 $($detailSections.ToString())
     </div>
 
