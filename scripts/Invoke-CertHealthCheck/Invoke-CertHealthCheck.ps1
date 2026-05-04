@@ -1223,9 +1223,9 @@ foreach ($server in $servers) {
         $stdOut = $proc.StandardOutput.ReadToEnd()
         $stdErr = $proc.StandardError.ReadToEnd()
 
-        /* Compute per-server timeout for WaitForExit: use server-specific,
-           then global, then default of 30 seconds. Add 10s grace period
-           beyond the exe's own --timeout to allow clean exit. */
+        # Compute per-server timeout for WaitForExit: use server-specific,
+        # then global, then default of 30 seconds. Add 10s grace period
+        # beyond the exe's own --timeout to allow clean exit.
         $serverTimeout = if ($server.Timeout -gt 0) { $server.Timeout } elseif ($Timeout -gt 0) { $Timeout } else { 30 }
         $waitMs = ($serverTimeout + 10) * 1000
 
