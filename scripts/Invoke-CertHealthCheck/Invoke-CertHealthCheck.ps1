@@ -473,11 +473,11 @@ function Read-ServerList {
 
     $lines = Get-Content -Path $Path -Encoding UTF8
 
-    $dataLines = $lines | Where-Object {
+    $dataLines = @($lines | Where-Object {
         $_.Trim() -and -not $_.TrimStart().StartsWith('#')
-    }
+    })
 
-    if (-not $dataLines -or $dataLines.Count -lt 2) {
+    if ($dataLines.Count -lt 2) {
         throw "Input file '$Path' contains no server entries (only header or comments found)."
     }
 
@@ -756,10 +756,10 @@ function Build-HtmlReport {
     )
 
     $totalServers = $Results.Count
-    $criticalCount = ($Results | Where-Object { $_.Status -eq 'Critical' }).Count
-    $warningCount = ($Results | Where-Object { $_.Status -eq 'Warning' }).Count
-    $errorCount = ($Results | Where-Object { $_.Status -eq 'Error' }).Count
-    $healthyCount = ($Results | Where-Object { $_.Status -eq 'Healthy' }).Count
+    $criticalCount = @($Results | Where-Object { $_.Status -eq 'Critical' }).Count
+    $warningCount = @($Results | Where-Object { $_.Status -eq 'Warning' }).Count
+    $errorCount = @($Results | Where-Object { $_.Status -eq 'Error' }).Count
+    $healthyCount = @($Results | Where-Object { $_.Status -eq 'Healthy' }).Count
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
     $machineFqdn = Get-MachineFqdn
 
@@ -1058,9 +1058,9 @@ function Build-EmailSubject {
     #>
     param ([array]$Results)
 
-    $criticalCount = ($Results | Where-Object { $_.Status -eq 'Critical' }).Count
-    $warningCount = ($Results | Where-Object { $_.Status -eq 'Warning' }).Count
-    $errorCount = ($Results | Where-Object { $_.Status -eq 'Error' }).Count
+    $criticalCount = @($Results | Where-Object { $_.Status -eq 'Critical' }).Count
+    $warningCount = @($Results | Where-Object { $_.Status -eq 'Warning' }).Count
+    $errorCount = @($Results | Where-Object { $_.Status -eq 'Error' }).Count
     $date = Get-Date -Format 'yyyy-MM-dd'
 
     if ($criticalCount -gt 0) {
@@ -1116,8 +1116,8 @@ if (-not (Test-Path $inputFileResolved)) {
 }
 
 $fileContent = Get-Content -Path $inputFileResolved -Encoding UTF8
-$nonCommentLines = $fileContent | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') }
-if (-not $nonCommentLines -or $nonCommentLines.Count -lt 2) {
+$nonCommentLines = @($fileContent | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
+if ($nonCommentLines.Count -lt 2) {
     if (Test-Interactive) {
         Write-Host "Input file is empty or contains only comments: $inputFileResolved" -ForegroundColor Yellow
         Write-Host 'Edit the file to add your servers (remove the # comment prefix), then re-run.' -ForegroundColor Cyan
@@ -1278,7 +1278,7 @@ if ($OutputPath) {
     Write-Host "Report saved to: $outputResolved" -ForegroundColor Green
 }
 
-$hasIssues = ($results | Where-Object { $_.Status -in @('Critical', 'Warning', 'Error') }).Count -gt 0
+$hasIssues = @($results | Where-Object { $_.Status -in @('Critical', 'Warning', 'Error') }).Count -gt 0
 $shouldSendEmail = ($hasIssues -or $AlwaysSendEmail)
 
 if ($shouldSendEmail) {
@@ -1311,10 +1311,10 @@ if ($shouldSendEmail) {
     }
 }
 
-$criticalCount = ($results | Where-Object { $_.Status -eq 'Critical' }).Count
-$warningCount = ($results | Where-Object { $_.Status -eq 'Warning' }).Count
-$errorCount = ($results | Where-Object { $_.Status -eq 'Error' }).Count
-$healthyCount = ($results | Where-Object { $_.Status -eq 'Healthy' }).Count
+$criticalCount = @($results | Where-Object { $_.Status -eq 'Critical' }).Count
+$warningCount = @($results | Where-Object { $_.Status -eq 'Warning' }).Count
+$errorCount = @($results | Where-Object { $_.Status -eq 'Error' }).Count
+$healthyCount = @($results | Where-Object { $_.Status -eq 'Healthy' }).Count
 
 Write-Host ''
 Write-Host "=== Summary ===" -ForegroundColor Cyan
