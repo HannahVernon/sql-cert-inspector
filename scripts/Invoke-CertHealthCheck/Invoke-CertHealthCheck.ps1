@@ -1248,8 +1248,7 @@ $css
 <body>
 <div class="container">
     <div style="background: #1a365d; color: #ffffff; padding: 24px 30px; border-radius: 8px 8px 0 0;">
-        <h1 style="margin: 0 0 8px 0; font-size: 24px; color: #ffffff;">SQL Certificate Health Report</h1>
-        <div style="font-size: 13px; color: #cbd5e1;">Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers</div>
+        <h1 style="margin: 0; font-size: 24px; color: #ffffff;">SQL Certificate Health Report</h1>
     </div>
 
     <div class="summary-bar">
@@ -1283,8 +1282,9 @@ $($detailSections.ToString())
     </div>
 
     <div class="footer">
+        Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers<br>
         Execution time: $($ElapsedTime.ToString('hh\:mm\:ss')) |
-        Tool: <code>$([System.Web.HttpUtility]::HtmlEncode($ExeFullPath))</code> |
+        Tool path: <code>$([System.Web.HttpUtility]::HtmlEncode($ExeFullPath))</code> |
         Sent from: <code>$([System.Web.HttpUtility]::HtmlEncode($machineFqdn))</code>
     </div>
 </div>
