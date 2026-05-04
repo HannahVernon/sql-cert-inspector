@@ -537,13 +537,33 @@ function Read-ServerList {
             continue
         }
 
+        $portValue = 0
+        if ($parts.Count -gt 1 -and $parts[1].Trim()) {
+            $portParsed = 0
+            if (-not [int]::TryParse($parts[1].Trim(), [ref]$portParsed) -or $portParsed -lt 0 -or $portParsed -gt 65535) {
+                Write-Warning "Skipping line $lineNum — invalid port '$($parts[1].Trim())' for server '$($parts[0].Trim())'."
+                continue
+            }
+            $portValue = $portParsed
+        }
+
+        $timeoutValue = 0
+        if ($parts.Count -gt 5 -and $parts[5].Trim()) {
+            $timeoutParsed = 0
+            if (-not [int]::TryParse($parts[5].Trim(), [ref]$timeoutParsed) -or $timeoutParsed -lt 0) {
+                Write-Warning "Skipping line $lineNum — invalid timeout '$($parts[5].Trim())' for server '$($parts[0].Trim())'."
+                continue
+            }
+            $timeoutValue = $timeoutParsed
+        }
+
         $entry = [PSCustomObject]@{
             ServerName          = $parts[0].Trim()
-            Port                = if ($parts.Count -gt 1 -and $parts[1].Trim()) { [int]$parts[1].Trim() } else { 0 }
+            Port                = $portValue
             TdsVersion          = if ($parts.Count -gt 2) { $parts[2].Trim() } else { '' }
             FullSpnDiagnostics  = if ($parts.Count -gt 3 -and $parts[3].Trim() -match '^(true|yes|1)$') { $true } else { $false }
             TestSanConnectivity = if ($parts.Count -gt 4 -and $parts[4].Trim() -match '^(true|yes|1)$') { $true } else { $false }
-            Timeout             = if ($parts.Count -gt 5 -and $parts[5].Trim()) { [int]$parts[5].Trim() } else { 0 }
+            Timeout             = $timeoutValue
         }
 
         $key = "$($entry.ServerName)|$($entry.Port)|$($entry.TdsVersion)|$($entry.FullSpnDiagnostics)|$($entry.TestSanConnectivity)|$($entry.Timeout)"
