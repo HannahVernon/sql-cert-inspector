@@ -1004,22 +1004,15 @@ function Build-HtmlReport {
     .status-warning { color: #ca8a04; font-weight: bold; }
     .status-healthy { color: #16a34a; font-weight: bold; }
     .status-error { color: #6b7280; font-weight: bold; }
-    details { margin: 8px 0; background: white; border: 1px solid #e2e8f0; border-radius: 6px; border-left: 4px solid #dc2626; }
-    summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 14px; background: #f8fafc; border-radius: 6px; }
-    summary:hover { background: #f1f5f9; }
-    .detail-body { padding: 16px; }
-    .detail-section { margin-bottom: 16px; }
-    .detail-section h4 { margin: 0 0 8px 0; color: #1e40af; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .detail-table { width: 100%; }
-    .detail-table td { padding: 4px 10px; font-size: 13px; border: none; }
-    .detail-table td:first-child { font-weight: 600; color: #475569; width: 220px; white-space: nowrap; }
+    .server-detail { width: 100%; border-collapse: collapse; background: white; margin-bottom: 16px; border: 1px solid #e2e8f0; border-left: 4px solid #dc2626; border-radius: 4px; }
+    .server-name { padding: 12px 16px; font-weight: 600; font-size: 14px; vertical-align: top; width: 35%; border-bottom: 1px solid #e2e8f0; }
+    .server-issues { padding: 12px 16px; font-size: 13px; vertical-align: top; border-bottom: 1px solid #e2e8f0; }
+    .server-cmd { padding: 12px 16px; }
     .issue-list { margin: 0; padding-left: 20px; }
     .issue-list li { margin: 2px 0; font-size: 13px; }
-    .san-list { margin: 0; padding-left: 20px; font-size: 12px; }
     .footer { padding: 16px 30px; background: white; border-top: 1px solid #e0e0e0; border-radius: 0 0 8px 8px; font-size: 12px; color: #6b7280; }
+    .footer-item { margin: 2px 0; }
     .container { max-width: 1200px; margin: 0 auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; }
-    .warning-list { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 8px 12px; }
-    .warning-list li { color: #92400e; font-size: 12px; }
 
     @media (prefers-color-scheme: dark) {
         body { background: #1a1a2e; color: #e0e0e0; }
@@ -1028,10 +1021,9 @@ function Build-HtmlReport {
         th { background: #1a2744; color: #94a3b8; border-bottom-color: #2a3a5c; }
         td { border-bottom-color: #2a3a5c; color: #e0e0e0; }
         tr:hover { background: #1a2744; }
-        details { background: #16213e; border-color: #2a3a5c; }
-        summary { background: #1a2744; color: #e0e0e0; }
-        summary:hover { background: #1e2d4a; }
-        .detail-table td:first-child { color: #94a3b8; }
+        .server-detail { background: #16213e; border-color: #2a3a5c; }
+        .server-name { border-bottom-color: #2a3a5c; }
+        .server-issues { border-bottom-color: #2a3a5c; }
         .container { box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
         .footer { background: #16213e; border-top-color: #2a3a5c; color: #94a3b8; }
     }
@@ -1067,173 +1059,26 @@ function Build-HtmlReport {
     foreach ($r in $nonHealthy) {
         Write-Verbose "  Detail section: $($r.ServerName)"
         $statusEmoji = Get-StatusEmoji -Status $r.Status
-        $statusText = Get-StatusText -Status $r.Status
         $serverEnc = [System.Web.HttpUtility]::HtmlEncode($r.ServerName)
 
-        [void]$detailSections.AppendLine("<details>")
-        [void]$detailSections.AppendLine("    <summary>$statusEmoji $serverEnc — $statusText</summary>")
-        [void]$detailSections.AppendLine("    <div class=`"detail-body`">")
-
+        $issuesHtml = ''
         if (@($r.Issues).Count -gt 0) {
-            [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-            [void]$detailSections.AppendLine("            <h4>Issues</h4>")
-            [void]$detailSections.AppendLine("            <ul class=`"issue-list`">")
-            foreach ($issue in $r.Issues) {
-                [void]$detailSections.AppendLine("                <li>$([System.Web.HttpUtility]::HtmlEncode($issue))</li>")
-            }
-            [void]$detailSections.AppendLine("            </ul>")
-            [void]$detailSections.AppendLine("        </div>")
-        }
-
-        if ($r.JsonResult) {
-            $json = $r.JsonResult
-            Write-Verbose "    Processing JSON sections for $($r.ServerName)..."
-
-            if ($json.PSObject.Properties.Name -contains 'connection' -and $json.connection) {
-                Write-Verbose "      Connection details section"
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>Connection Details</h4>")
-                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
-                $connFields = @(
-                    ,@('Server', (Get-SafeProperty $json.connection 'serverName'))
-                    ,@('Resolved Host', (Get-SafeProperty $json.connection 'resolvedHost'))
-                    ,@('Resolved Port', (Get-SafeProperty $json.connection 'resolvedPort'))
-                    ,@('Connected IP', (Get-SafeProperty $json.connection 'connectedIP'))
-                    ,@('Instance Name', (Get-SafeProperty $json.connection 'instanceName'))
-                    ,@('SQL Server Version', (Get-SafeProperty $json.connection 'sqlServerVersion'))
-                    ,@('Encryption Mode', (Get-SafeProperty $json.connection 'encryptionMode'))
-                    ,@('TDS Protocol', (Get-SafeProperty $json.connection 'tdsProtocol'))
-                )
-                foreach ($f in $connFields) {
-                    if ($f[1]) {
-                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
-                    }
-                }
-                [void]$detailSections.AppendLine("            </table>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
-
-            if ($json.PSObject.Properties.Name -contains 'certificate' -and $json.certificate) {
-                Write-Verbose "      Certificate details section"
-                $c = $json.certificate
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>Certificate Details</h4>")
-                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
-                $certFields = @(
-                    ,@('Subject', (Get-SafeProperty $c 'subject'))
-                    ,@('Issuer', (Get-SafeProperty $c 'issuer'))
-                    ,@('Serial Number', (Get-SafeProperty $c 'serialNumber'))
-                    ,@('Thumbprint (SHA-1)', (Get-SafeProperty $c 'thumbprintSha1'))
-                    ,@('Fingerprint (SHA-256)', (Get-SafeProperty $c 'thumbprintSha256'))
-                    ,@('Valid From', (Get-SafeProperty $c 'validFrom'))
-                    ,@('Valid To', (Get-SafeProperty $c 'validTo'))
-                    ,@('Days Until Expiry', (Get-SafeProperty $c 'daysUntilExpiry'))
-                    ,@('Key Algorithm', "$(Get-SafeProperty $c 'keyAlgorithm') ($(Get-SafeProperty $c 'keySizeBits') bits)")
-                    ,@('Signature Algorithm', (Get-SafeProperty $c 'signatureAlgorithm'))
-                    ,@('Self-Signed', (Get-SafeProperty $c 'isSelfSigned'))
-                )
-                foreach ($f in $certFields) {
-                    if ($null -ne $f[1]) {
-                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
-                    }
-                }
-                if (($c.PSObject.Properties.Name -contains 'subjectAlternativeNames') -and $c.subjectAlternativeNames -and @($c.subjectAlternativeNames).Count -gt 0) {
-                    $sanHtml = ($c.subjectAlternativeNames | ForEach-Object { "<li>$([System.Web.HttpUtility]::HtmlEncode($_))</li>" }) -join ''
-                    [void]$detailSections.AppendLine("            <tr><td>SANs</td><td><ul class=`"san-list`">$sanHtml</ul></td></tr>")
-                }
-                [void]$detailSections.AppendLine("            </table>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
-
-            if ($json.PSObject.Properties.Name -contains 'tls' -and $json.tls) {
-                Write-Verbose "      TLS section"
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>TLS Connection Security</h4>")
-                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
-                $tlsFields = @(
-                    ,@('Protocol', (Get-SafeProperty $json.tls 'protocol'))
-                    ,@('Cipher Suite', (Get-SafeProperty $json.tls 'cipherSuite'))
-                    ,@('Key Exchange', "$(Get-SafeProperty $json.tls 'keyExchangeAlgorithm') ($(Get-SafeProperty $json.tls 'keyExchangeStrength') bits)")
-                    ,@('Hash Algorithm', "$(Get-SafeProperty $json.tls 'hashAlgorithm') ($(Get-SafeProperty $json.tls 'hashStrength') bits)")
-                )
-                foreach ($f in $tlsFields) {
-                    if ($f[1]) {
-                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
-                    }
-                }
-                [void]$detailSections.AppendLine("            </table>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
-
-            if ($json.PSObject.Properties.Name -contains 'warnings' -and $json.warnings -and @($json.warnings).Count -gt 0) {
-                Write-Verbose "      Warnings section"
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>Warnings</h4>")
-                [void]$detailSections.AppendLine("            <ul class=`"warning-list`">")
-                foreach ($w in $json.warnings) {
-                    $wSeverity = Get-SafeProperty $w 'severity'
-                    $wMessage = Get-SafeProperty $w 'message'
-                    [void]$detailSections.AppendLine("                <li><strong>[$wSeverity]</strong> $([System.Web.HttpUtility]::HtmlEncode($wMessage))</li>")
-                }
-                [void]$detailSections.AppendLine("            </ul>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
-
-            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'dns' -and $json.kerberos.dns) {
-                Write-Verbose "      DNS section"
-                $dns = $json.kerberos.dns
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>DNS Resolution</h4>")
-                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
-                $dnsFields = @(
-                    ,@('Requested Hostname', (Get-SafeProperty $dns 'requestedHostname'))
-                    ,@('Resolved FQDN', (Get-SafeProperty $dns 'resolvedFqdn'))
-                    ,@('DNS Suffix Used', (Get-SafeProperty $dns 'dnsSuffixUsed'))
-                    ,@('Record Types', ((Get-SafeProperty $dns 'dnsRecordTypes') -join ', '))
-                    ,@('Resolved IPs', ((Get-SafeProperty $dns 'resolvedIpAddresses') -join ', '))
-                    ,@('Reverse Hostname', (Get-SafeProperty $dns 'reverseHostname'))
-                    ,@('CNAME Target', (Get-SafeProperty $dns 'cnameTarget'))
-                )
-                foreach ($f in $dnsFields) {
-                    if ($f[1]) {
-                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
-                    }
-                }
-                [void]$detailSections.AppendLine("            </table>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
-
-            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'spns' -and $json.kerberos.spns -and @($json.kerberos.spns).Count -gt 0) {
-                Write-Verbose "      SPN section"
-                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-                [void]$detailSections.AppendLine("            <h4>Kerberos SPN Registration</h4>")
-                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
-                foreach ($spn in $json.kerberos.spns) {
-                    $spnFound = Get-SafeProperty $spn 'found'
-                    $spnAccount = Get-SafeProperty $spn 'accountName'
-                    $spnLabel = Get-SafeProperty $spn 'label'
-                    $spnValue = Get-SafeProperty $spn 'spn'
-                    $spnStatus = if ($spnFound) { "REGISTERED &#x2192; $([System.Web.HttpUtility]::HtmlEncode($spnAccount))" } else { '<span style="color:#dc2626">NOT FOUND</span>' }
-                    [void]$detailSections.AppendLine("            <tr><td>$([System.Web.HttpUtility]::HtmlEncode($spnLabel))</td><td><code>$([System.Web.HttpUtility]::HtmlEncode($spnValue))</code> $spnStatus</td></tr>")
-                }
-                [void]$detailSections.AppendLine("            </table>")
-                [void]$detailSections.AppendLine("        </div>")
-            }
+            $issueItems = ($r.Issues | ForEach-Object { "<li>$([System.Web.HttpUtility]::HtmlEncode($_))</li>" }) -join ''
+            $issuesHtml = "<ul class=`"issue-list`">$issueItems</ul>"
         }
         elseif ($r.RawOutput) {
-            [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-            [void]$detailSections.AppendLine("            <h4>Raw Output</h4>")
-            [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.RawOutput))</div>")
-            [void]$detailSections.AppendLine("        </div>")
+            $issuesHtml = "<div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.RawOutput))</div>"
         }
 
-        [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
-        [void]$detailSections.AppendLine("            <h4>Command Line</h4>")
-        [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
-        [void]$detailSections.AppendLine("        </div>")
-
-        [void]$detailSections.AppendLine("    </div>")
-        [void]$detailSections.AppendLine("</details>")
+        [void]$detailSections.AppendLine("<table class=`"server-detail`">")
+        [void]$detailSections.AppendLine("    <tr>")
+        [void]$detailSections.AppendLine("        <td class=`"server-name`">$statusEmoji $serverEnc</td>")
+        [void]$detailSections.AppendLine("        <td class=`"server-issues`">$issuesHtml</td>")
+        [void]$detailSections.AppendLine("    </tr>")
+        [void]$detailSections.AppendLine("    <tr>")
+        [void]$detailSections.AppendLine("        <td colspan=`"2`" class=`"server-cmd`"><div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div></td>")
+        [void]$detailSections.AppendLine("    </tr>")
+        [void]$detailSections.AppendLine("</table>")
     }
 
     $html = @"
@@ -1282,10 +1127,12 @@ $($detailSections.ToString())
     </div>
 
     <div class="footer">
-        Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers<br>
-        Execution time: $($ElapsedTime.ToString('hh\:mm\:ss')) |
-        Tool path: <code>$([System.Web.HttpUtility]::HtmlEncode($ExeFullPath))</code> |
-        Sent from: <code>$([System.Web.HttpUtility]::HtmlEncode($machineFqdn))</code>
+        <div class="footer-item">Generated: $timestamp</div>
+        <div class="footer-item">Tool: sql-cert-inspector $ToolVersion</div>
+        <div class="footer-item">Servers: $totalServers</div>
+        <div class="footer-item">Execution time: $($ElapsedTime.ToString('hh\:mm\:ss'))</div>
+        <div class="footer-item">Tool path: $([System.Web.HttpUtility]::HtmlEncode($ExeFullPath))</div>
+        <div class="footer-item">Sent from: $([System.Web.HttpUtility]::HtmlEncode($machineFqdn))</div>
     </div>
 </div>
 </body>
