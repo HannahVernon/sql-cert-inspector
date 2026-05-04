@@ -989,15 +989,16 @@ function Build-HtmlReport {
     .report-header { background: #1a365d; color: white; padding: 20px 30px; border-radius: 8px 8px 0 0; }
     .report-header h1 { margin: 0 0 8px 0; font-size: 24px; }
     .report-header .meta { font-size: 13px; opacity: 0.85; }
-    .summary-bar { display: flex; gap: 16px; padding: 16px 30px; background: white; border-bottom: 1px solid #e0e0e0; flex-wrap: wrap; }
-    .summary-card { padding: 12px 20px; border-radius: 6px; text-align: center; min-width: 100px; }
+    .summary-bar { padding: 16px 30px; background: white; border-bottom: 1px solid #e0e0e0; }
+    .summary-table { border-collapse: separate; border-spacing: 8px 0; margin: 0 auto; width: auto; }
+    .summary-table td { padding: 12px 20px; border-radius: 6px; text-align: center; min-width: 100px; border-bottom: none; }
     .card-critical { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
     .card-warning { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; }
     .card-healthy { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
     .card-error { background: #e5e7eb; color: #374151; border: 1px solid #9ca3af; }
     .card-total { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
-    .summary-card .count { font-size: 28px; font-weight: bold; }
-    .summary-card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary-count { font-size: 28px; font-weight: bold; }
+    .summary-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
     table { width: 100%; border-collapse: collapse; background: white; }
     th { background: #f1f5f9; padding: 10px 14px; text-align: left; font-size: 13px; color: #475569; border-bottom: 2px solid #cbd5e1; }
     td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
@@ -1242,11 +1243,13 @@ $css
     </div>
 
     <div class="summary-bar">
-        <div class="summary-card card-total"><div class="count">$totalServers</div><div class="label">Total</div></div>
-        <div class="summary-card card-critical"><div class="count">$criticalCount</div><div class="label">Critical</div></div>
-        <div class="summary-card card-warning"><div class="count">$warningCount</div><div class="label">Warning</div></div>
-        <div class="summary-card card-error"><div class="count">$errorCount</div><div class="label">Error</div></div>
-        <div class="summary-card card-healthy"><div class="count">$healthyCount</div><div class="label">Healthy</div></div>
+        <table class="summary-table"><tr>
+            <td class="card-total"><div class="summary-count">$totalServers</div><div class="summary-label">Total</div></td>
+            <td class="card-critical"><div class="summary-count">$criticalCount</div><div class="summary-label">Critical</div></td>
+            <td class="card-warning"><div class="summary-count">$warningCount</div><div class="summary-label">Warning</div></td>
+            <td class="card-error"><div class="summary-count">$errorCount</div><div class="summary-label">Error</div></td>
+            <td class="card-healthy"><div class="summary-count">$healthyCount</div><div class="summary-label">Healthy</div></td>
+        </tr></table>
     </div>
 
     <table>
