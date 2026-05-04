@@ -735,7 +735,7 @@ function Read-ServerList {
         throw "Input file '$Path' contains no valid server entries after parsing."
     }
 
-    return ($servers | Sort-Object -Property ServerName)
+    return $servers
 }
 
 #endregion
