@@ -257,3 +257,12 @@ This project uses [MinVer](https://github.com/adamralph/minver) for automatic ve
 ## License
 
 MIT
+
+## Automated Health Checks
+
+For batch certificate inspection across multiple servers, see the [Invoke-CertHealthCheck](scripts/Invoke-CertHealthCheck/README.md) PowerShell script. It reads a server list, runs `sql-cert-inspector` against each one, generates an HTML report, and optionally emails the results.
+
+```powershell
+# Quick start
+.\scripts\Invoke-CertHealthCheck\Invoke-CertHealthCheck.ps1 -InputFile servers.txt -OutputPath report.html
+```

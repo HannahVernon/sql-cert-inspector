@@ -1,0 +1,1248 @@
+<#
+.SYNOPSIS
+    Automated SQL Server TLS certificate health check using sql-cert-inspector.
+
+.DESCRIPTION
+    Reads a pipe-delimited server list, runs sql-cert-inspector against each server,
+    classifies certificate health, generates an HTML report, and optionally emails it.
+
+.PARAMETER InputFile
+    Path to a pipe-delimited file listing SQL Servers to inspect.
+    Required unless -Setup is specified.
+
+.PARAMETER ExePath
+    Path to the sql-cert-inspector executable. Defaults to the current directory.
+
+.PARAMETER OutputPath
+    File path where the HTML report will be saved.
+
+.PARAMETER Timeout
+    Global connection timeout in seconds. Can be overridden per-server in the input file.
+
+.PARAMETER AlwaysSendEmail
+    Send the report email on every run, even when no issues are found.
+
+.PARAMETER Setup
+    Interactive setup for SMTP email configuration.
+
+.PARAMETER WhatIf
+    Show what would be executed without actually running inspections.
+
+.EXAMPLE
+    .\Invoke-CertHealthCheck.ps1 -InputFile servers.txt -OutputPath report.html
+
+.EXAMPLE
+    .\Invoke-CertHealthCheck.ps1 -Setup
+
+.EXAMPLE
+    .\Invoke-CertHealthCheck.ps1 -InputFile servers.txt -WhatIf
+#>
+[CmdletBinding(SupportsShouldProcess)]
+param (
+    [Parameter(Position = 0)]
+    [string]$InputFile
+
+  , [Parameter()]
+    [string]$ExePath = '.'
+
+  , [Parameter()]
+    [string]$OutputPath
+
+  , [Parameter()]
+    [int]$Timeout
+
+  , [Parameter()]
+    [switch]$AlwaysSendEmail
+
+  , [Parameter()]
+    [switch]$Setup
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$script:SmtpConfigPath = Join-Path $script:ScriptDir 'smtp-config.json'
+$script:CredentialTarget = 'Invoke-CertHealthCheck-Smtp'
+
+#region Helper Functions
+
+function Test-Interactive {
+    <#
+    .SYNOPSIS
+        Returns $true when the session is interactive (has a console window).
+    #>
+    try {
+        return [Environment]::UserInteractive -and [Console]::WindowHeight -gt 0
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-SmtpConfig {
+    <#
+    .SYNOPSIS
+        Loads SMTP configuration from the json file, or returns $null.
+    #>
+    if (Test-Path $script:SmtpConfigPath) {
+        return Get-Content $script:SmtpConfigPath -Raw | ConvertFrom-Json
+    }
+    return $null
+}
+
+function Get-StoredCredential {
+    <#
+    .SYNOPSIS
+        Retrieves the SMTP credential from Windows Credential Manager via cmdkey / vault.
+    #>
+    param ([string]$Target)
+
+    $sig = @'
+[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool CredRead(
+    string target,
+    int type,
+    int reservedFlag,
+    out IntPtr credentialPtr);
+
+[DllImport("advapi32.dll")]
+public static extern void CredFree(IntPtr cred);
+'@
+    $advapi = Add-Type -MemberDefinition $sig -Namespace 'CredManager' -Name 'NativeMethods' -PassThru
+
+    $ptr = [IntPtr]::Zero
+    $success = $advapi::CredRead($Target, 1, 0, [ref]$ptr)
+    if (-not $success) {
+        return $null
+    }
+
+    try {
+        $cred = [System.Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [Type]::GetType('CredManager.NativeMethods'))
+        $rawBytes = New-Object byte[] 512
+        [System.Runtime.InteropServices.Marshal]::Copy(
+            [System.Runtime.InteropServices.Marshal]::ReadIntPtr($ptr, 24),
+            $rawBytes,
+            0,
+            [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr, 16)
+        )
+        $size = [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr, 16)
+        $passwordText = [System.Text.Encoding]::Unicode.GetString($rawBytes, 0, $size)
+        $securePass = ConvertTo-SecureString $passwordText -AsPlainText -Force
+        return $securePass
+    }
+    finally {
+        $advapi::CredFree($ptr)
+    }
+}
+
+function Set-StoredCredential {
+    <#
+    .SYNOPSIS
+        Stores SMTP credential in Windows Credential Manager via cmdkey.
+    #>
+    param (
+        [string]$Target
+      , [string]$Username
+      , [SecureString]$Password
+    )
+
+    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+        [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+    )
+
+    $process = Start-Process -FilePath 'cmdkey.exe' `
+        -ArgumentList "/generic:$Target", "/user:$Username", "/pass:$plain" `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'
+
+    if ($process.ExitCode -ne 0) {
+        throw "Failed to store credential in Windows Credential Manager (exit code $($process.ExitCode))."
+    }
+}
+
+function Remove-StoredCredential {
+    <#
+    .SYNOPSIS
+        Removes a credential from Windows Credential Manager.
+    #>
+    param ([string]$Target)
+
+    Start-Process -FilePath 'cmdkey.exe' `
+        -ArgumentList "/delete:$Target" `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL' | Out-Null
+}
+
+function Read-HostWithDefault {
+    <#
+    .SYNOPSIS
+        Prompts the user with a default value shown in brackets.
+    #>
+    param (
+        [string]$Prompt
+      , [string]$Default = ''
+    )
+
+    if ($Default) {
+        $response = Read-Host "$Prompt [$Default]"
+        if ([string]::IsNullOrWhiteSpace($response)) { return $Default }
+        return $response.Trim()
+    }
+    else {
+        $val = Read-Host $Prompt
+        return $val.Trim()
+    }
+}
+
+function Send-SmtpEmail {
+    <#
+    .SYNOPSIS
+        Sends an HTML email using configured SMTP settings.
+    #>
+    param (
+        [object]$Config
+      , [string]$Subject
+      , [string]$Body
+      , [SecureString]$Password = $null
+    )
+
+    $smtpClient = New-Object System.Net.Mail.SmtpClient($Config.smtpServer, $Config.smtpPort)
+    $smtpClient.EnableSsl = [bool]$Config.enableTls
+
+    if ($Config.useAuthentication -and $Password) {
+        $plainPass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+        )
+        $smtpClient.Credentials = New-Object System.Net.NetworkCredential($Config.smtpUsername, $plainPass)
+    }
+
+    $message = New-Object System.Net.Mail.MailMessage
+    $message.From = $Config.fromAddress
+    $message.Subject = $Subject
+    $message.Body = $Body
+    $message.IsBodyHtml = $true
+
+    foreach ($addr in ($Config.toAddress -split ';' | Where-Object { $_.Trim() })) {
+        $message.To.Add($addr.Trim())
+    }
+    if ($Config.ccAddress) {
+        foreach ($addr in ($Config.ccAddress -split ';' | Where-Object { $_.Trim() })) {
+            $message.CC.Add($addr.Trim())
+        }
+    }
+    if ($Config.bccAddress) {
+        foreach ($addr in ($Config.bccAddress -split ';' | Where-Object { $_.Trim() })) {
+            $message.Bcc.Add($addr.Trim())
+        }
+    }
+
+    try {
+        $smtpClient.Send($message)
+    }
+    finally {
+        $message.Dispose()
+        $smtpClient.Dispose()
+    }
+}
+
+function Get-MachineFqdn {
+    <#
+    .SYNOPSIS
+        Returns the FQDN of the local machine.
+    #>
+    try {
+        return [System.Net.Dns]::GetHostEntry([Environment]::MachineName).HostName
+    }
+    catch {
+        return [Environment]::MachineName
+    }
+}
+
+#endregion
+
+#region Setup Mode
+
+function Invoke-SmtpSetup {
+    <#
+    .SYNOPSIS
+        Interactive SMTP configuration wizard.
+    #>
+    Write-Host ''
+    Write-Host '=== SMTP Configuration Setup ===' -ForegroundColor Cyan
+    Write-Host ''
+
+    $existing = Get-SmtpConfig
+
+    $smtpServer = Read-HostWithDefault -Prompt 'SMTP Server' -Default $(if ($existing) { $existing.smtpServer } else { '' })
+    $smtpPort = Read-HostWithDefault -Prompt 'SMTP Port' -Default $(if ($existing) { [string]$existing.smtpPort } else { '587' })
+    $enableTlsStr = Read-HostWithDefault -Prompt 'Enable TLS (true/false)' -Default $(if ($existing) { [string]$existing.enableTls } else { 'true' })
+    $fromAddress = Read-HostWithDefault -Prompt 'From Address' -Default $(if ($existing) { $existing.fromAddress } else { '' })
+    $toAddress = Read-HostWithDefault -Prompt 'To Address (semicolon-separated for multiple)' -Default $(if ($existing) { $existing.toAddress } else { '' })
+    $ccAddress = Read-HostWithDefault -Prompt 'CC Address (optional, semicolon-separated)' -Default $(if ($existing) { $existing.ccAddress } else { '' })
+    $bccAddress = Read-HostWithDefault -Prompt 'BCC Address (optional, semicolon-separated)' -Default $(if ($existing) { $existing.bccAddress } else { '' })
+    $useAuthStr = Read-HostWithDefault -Prompt 'Use SMTP Authentication (true/false)' -Default $(if ($existing) { [string]$existing.useAuthentication } else { 'false' })
+
+    $enableTls = $enableTlsStr -match '^(true|yes|1)$'
+    $useAuth = $useAuthStr -match '^(true|yes|1)$'
+
+    $smtpUsername = ''
+    $smtpPassword = $null
+
+    if ($useAuth) {
+        $smtpUsername = Read-HostWithDefault -Prompt 'SMTP Username' -Default $(if ($existing) { $existing.smtpUsername } else { '' })
+        $smtpPassword = Read-Host 'SMTP Password' -AsSecureString
+    }
+
+    $config = [PSCustomObject]@{
+        smtpServer        = $smtpServer
+        smtpPort          = [int]$smtpPort
+        enableTls         = $enableTls
+        fromAddress       = $fromAddress
+        toAddress         = $toAddress
+        ccAddress         = $ccAddress
+        bccAddress        = $bccAddress
+        useAuthentication = $useAuth
+        smtpUsername       = $smtpUsername
+    }
+
+    Write-Host ''
+    Write-Host 'Sending test email...' -ForegroundColor Yellow
+
+    $testSubject = "sql-cert-inspector Health Check — SMTP Test"
+    $testBody = @"
+<html><body>
+<p>This is a test email from <strong>Invoke-CertHealthCheck</strong>.</p>
+<p>SMTP configuration is working correctly.</p>
+<p>Sent from: <code>$(Get-MachineFqdn)</code></p>
+</body></html>
+"@
+
+    $retryLoop = $true
+    while ($retryLoop) {
+        try {
+            Send-SmtpEmail -Config $config -Subject $testSubject -Body $testBody -Password $smtpPassword
+            Write-Host 'Test email sent successfully!' -ForegroundColor Green
+            $retryLoop = $false
+        }
+        catch {
+            Write-Host "Test email failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host ''
+            $retry = Read-Host 'Retry? (Y/N)'
+            if ($retry -notmatch '^[Yy]') {
+                Write-Host 'Setup aborted. Configuration was NOT saved.' -ForegroundColor Yellow
+                return
+            }
+            Write-Host ''
+            Write-Host 'Re-enter SMTP settings:' -ForegroundColor Cyan
+            $smtpServer = Read-HostWithDefault -Prompt 'SMTP Server' -Default $config.smtpServer
+            $smtpPort = Read-HostWithDefault -Prompt 'SMTP Port' -Default ([string]$config.smtpPort)
+            $enableTlsStr = Read-HostWithDefault -Prompt 'Enable TLS (true/false)' -Default ([string]$config.enableTls)
+            $fromAddress = Read-HostWithDefault -Prompt 'From Address' -Default $config.fromAddress
+            $toAddress = Read-HostWithDefault -Prompt 'To Address' -Default $config.toAddress
+            $useAuthStr = Read-HostWithDefault -Prompt 'Use SMTP Authentication (true/false)' -Default ([string]$config.useAuthentication)
+
+            $config.smtpServer = $smtpServer
+            $config.smtpPort = [int]$smtpPort
+            $config.enableTls = $enableTlsStr -match '^(true|yes|1)$'
+            $config.fromAddress = $fromAddress
+            $config.toAddress = $toAddress
+            $config.useAuthentication = $useAuthStr -match '^(true|yes|1)$'
+
+            if ($config.useAuthentication) {
+                $config.smtpUsername = Read-HostWithDefault -Prompt 'SMTP Username' -Default $config.smtpUsername
+                $smtpPassword = Read-Host 'SMTP Password' -AsSecureString
+            }
+        }
+    }
+
+    $config | ConvertTo-Json -Depth 4 | Set-Content -Path $script:SmtpConfigPath -Encoding UTF8
+    Write-Host "Configuration saved to: $($script:SmtpConfigPath)" -ForegroundColor Green
+
+    if ($useAuth -and $smtpPassword) {
+        Set-StoredCredential -Target $script:CredentialTarget -Username $config.smtpUsername -Password $smtpPassword
+        Write-Host "Credential stored in Windows Credential Manager (target: $($script:CredentialTarget))." -ForegroundColor Green
+    }
+    else {
+        Remove-StoredCredential -Target $script:CredentialTarget
+    }
+
+    Write-Host ''
+    Write-Host 'SMTP setup complete.' -ForegroundColor Cyan
+}
+
+#endregion
+
+#region Input File Parsing
+
+function New-SampleInputFile {
+    <#
+    .SYNOPSIS
+        Creates a sample pipe-delimited input file with commented examples.
+    #>
+    param ([string]$Path)
+
+    $content = @(
+        'server-name|port|tds-version|full-spn-diagnostics|test-san-connectivity|timeout'
+        '# myserver\SQLEXPRESS|1434||||'
+        '# myserver2.example.com||tds8|true|true|'
+        '# myserver3||||||15'
+    )
+
+    $content -join "`r`n" | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Read-ServerList {
+    <#
+    .SYNOPSIS
+        Parses the pipe-delimited input file into an array of server objects.
+    #>
+    param ([string]$Path)
+
+    $lines = Get-Content -Path $Path -Encoding UTF8
+
+    $dataLines = $lines | Where-Object {
+        $_.Trim() -and -not $_.TrimStart().StartsWith('#')
+    }
+
+    if (-not $dataLines -or $dataLines.Count -lt 2) {
+        throw "Input file '$Path' contains no server entries (only header or comments found)."
+    }
+
+    $header = ($dataLines | Select-Object -First 1).Trim()
+    $expectedHeader = 'server-name|port|tds-version|full-spn-diagnostics|test-san-connectivity|timeout'
+    if ($header -ne $expectedHeader) {
+        throw "Invalid header row. Expected:`r`n  $expectedHeader`r`nGot:`r`n  $header"
+    }
+
+    $servers = @()
+    $seen = @{}
+    $lineNum = 0
+
+    foreach ($line in ($dataLines | Select-Object -Skip 1)) {
+        $lineNum++
+        $parts = $line.Split('|')
+        if ($parts.Count -lt 1 -or [string]::IsNullOrWhiteSpace($parts[0])) {
+            Write-Warning "Skipping line $lineNum — missing server-name."
+            continue
+        }
+
+        $entry = [PSCustomObject]@{
+            ServerName          = $parts[0].Trim()
+            Port                = if ($parts.Count -gt 1 -and $parts[1].Trim()) { [int]$parts[1].Trim() } else { 0 }
+            TdsVersion          = if ($parts.Count -gt 2) { $parts[2].Trim() } else { '' }
+            FullSpnDiagnostics  = if ($parts.Count -gt 3 -and $parts[3].Trim() -match '^(true|yes|1)$') { $true } else { $false }
+            TestSanConnectivity = if ($parts.Count -gt 4 -and $parts[4].Trim() -match '^(true|yes|1)$') { $true } else { $false }
+            Timeout             = if ($parts.Count -gt 5 -and $parts[5].Trim()) { [int]$parts[5].Trim() } else { 0 }
+        }
+
+        $key = "$($entry.ServerName)|$($entry.Port)|$($entry.TdsVersion)|$($entry.FullSpnDiagnostics)|$($entry.TestSanConnectivity)|$($entry.Timeout)"
+        if ($seen.ContainsKey($key)) {
+            Write-Warning "Duplicate entry skipped: $($entry.ServerName) (all columns identical)."
+            continue
+        }
+        $seen[$key] = $true
+        $servers += $entry
+    }
+
+    if ($servers.Count -eq 0) {
+        throw "Input file '$Path' contains no valid server entries after parsing."
+    }
+
+    return $servers
+}
+
+#endregion
+
+#region Build Command Line
+
+function Build-InspectorArgs {
+    <#
+    .SYNOPSIS
+        Builds the command-line argument array for sql-cert-inspector.
+    #>
+    param (
+        [PSCustomObject]$Server
+      , [int]$GlobalTimeout
+      , [switch]$IncludeJson
+    )
+
+    $cmdArgs = @('--server', $Server.ServerName)
+
+    if ($Server.Port -gt 0) {
+        $cmdArgs += '--port'
+        $cmdArgs += [string]$Server.Port
+    }
+
+    if ($Server.TdsVersion -eq 'tds8') {
+        $cmdArgs += '--encrypt-strict'
+    }
+
+    if ($Server.FullSpnDiagnostics) {
+        $cmdArgs += '--full-spn-diagnostics'
+    }
+
+    if ($Server.TestSanConnectivity) {
+        $cmdArgs += '--test-san-connectivity'
+    }
+
+    $effectiveTimeout = if ($Server.Timeout -gt 0) { $Server.Timeout } elseif ($GlobalTimeout -gt 0) { $GlobalTimeout } else { 0 }
+    if ($effectiveTimeout -gt 0) {
+        $cmdArgs += '--timeout'
+        $cmdArgs += [string]$effectiveTimeout
+    }
+
+    if ($IncludeJson) {
+        $cmdArgs += '--json'
+        $cmdArgs += '--no-color'
+    }
+
+    return $cmdArgs
+}
+
+function Format-DisplayCommandLine {
+    <#
+    .SYNOPSIS
+        Builds a display-friendly command line string (without --json/--no-color).
+    #>
+    param (
+        [string]$ExeFullPath
+      , [PSCustomObject]$Server
+      , [int]$GlobalTimeout
+    )
+
+    $displayArgs = Build-InspectorArgs -Server $Server -GlobalTimeout $GlobalTimeout
+    $quotedArgs = $displayArgs | ForEach-Object {
+        if ($_ -match '\s|\\') { "`"$_`"" } else { $_ }
+    }
+    return "$ExeFullPath $($quotedArgs -join ' ')"
+}
+
+#endregion
+
+#region Certificate Health Classification
+
+function Get-HealthStatus {
+    <#
+    .SYNOPSIS
+        Classifies the health of an inspection result.
+        Returns: Critical, Warning, Healthy, or Error.
+    #>
+    param (
+        [object]$JsonResult
+      , [int]$ExitCode
+    )
+
+    if ($ExitCode -ne 0) {
+        return 'Error'
+    }
+
+    if (-not $JsonResult -or -not $JsonResult.certificate) {
+        return 'Error'
+    }
+
+    $cert = $JsonResult.certificate
+    $issues = @()
+
+    $daysLeft = $cert.daysUntilExpiry
+    if ($daysLeft -le 0) {
+        return 'Critical'
+    }
+    if ($daysLeft -le 7) {
+        return 'Critical'
+    }
+
+    if ($daysLeft -le 30) {
+        $issues += 'Expiring soon'
+    }
+    if ($cert.isSelfSigned) {
+        $issues += 'Self-signed'
+    }
+    if ($cert.keySizeBits -lt 2048) {
+        $issues += 'Weak key'
+    }
+    if ($cert.signatureAlgorithm -match '(?i)(sha1|md5)') {
+        $issues += 'Deprecated signature algorithm'
+    }
+
+    if ($JsonResult.warnings) {
+        $issues += $JsonResult.warnings | ForEach-Object { $_.message }
+    }
+
+    if ($issues.Count -gt 0) {
+        return 'Warning'
+    }
+
+    return 'Healthy'
+}
+
+function Get-StatusEmoji {
+    param ([string]$Status)
+    switch ($Status) {
+        'Critical' { return '&#x1F534;' }  <# red circle #>
+        'Warning'  { return '&#x1F7E1;' }  <# yellow circle #>
+        'Healthy'  { return '&#x1F7E2;' }  <# green circle #>
+        'Error'    { return '&#x26AB;' }    <# black circle #>
+        default    { return '&#x2753;' }    <# question mark #>
+    }
+}
+
+function Get-StatusText {
+    param ([string]$Status)
+    switch ($Status) {
+        'Critical' { return 'CRITICAL' }
+        'Warning'  { return 'WARNING' }
+        'Healthy'  { return 'Healthy' }
+        'Error'    { return 'ERROR' }
+        default    { return 'Unknown' }
+    }
+}
+
+function Get-IssueList {
+    <#
+    .SYNOPSIS
+        Returns a list of issues found for a given inspection result.
+    #>
+    param (
+        [object]$JsonResult
+      , [int]$ExitCode
+      , [string]$StdErr
+    )
+
+    $issues = @()
+
+    if ($ExitCode -eq 1) {
+        $issues += 'Connection failure'
+        if ($StdErr) { $issues += $StdErr.Trim() }
+        return $issues
+    }
+    if ($ExitCode -eq 2) {
+        $issues += 'Encryption not enabled'
+        return $issues
+    }
+    if ($ExitCode -eq 3) {
+        $issues += 'Browser resolution failure'
+        return $issues
+    }
+    if ($ExitCode -ne 0) {
+        $issues += "Exit code: $ExitCode"
+        if ($StdErr) { $issues += $StdErr.Trim() }
+        return $issues
+    }
+
+    if (-not $JsonResult -or -not $JsonResult.certificate) {
+        $issues += 'No certificate data returned'
+        return $issues
+    }
+
+    $cert = $JsonResult.certificate
+
+    if ($cert.daysUntilExpiry -le 0) {
+        $issues += 'Certificate has EXPIRED'
+    }
+    elseif ($cert.daysUntilExpiry -le 7) {
+        $issues += "Expires in $($cert.daysUntilExpiry) day(s) — CRITICAL"
+    }
+    elseif ($cert.daysUntilExpiry -le 30) {
+        $issues += "Expires in $($cert.daysUntilExpiry) day(s)"
+    }
+
+    if ($cert.isSelfSigned) {
+        $issues += 'Self-signed certificate'
+    }
+    if ($cert.keySizeBits -lt 2048) {
+        $issues += "Weak key size ($($cert.keySizeBits) bits)"
+    }
+    if ($cert.signatureAlgorithm -match '(?i)(sha1|md5)') {
+        $issues += "Deprecated signature algorithm ($($cert.signatureAlgorithm))"
+    }
+
+    if ($JsonResult.warnings) {
+        foreach ($w in $JsonResult.warnings) {
+            $issues += $w.message
+        }
+    }
+
+    return $issues
+}
+
+#endregion
+
+#region HTML Report Generation
+
+function Build-HtmlReport {
+    <#
+    .SYNOPSIS
+        Generates a self-contained HTML report from the inspection results.
+    #>
+    param (
+        [array]$Results
+      , [string]$ExeFullPath
+      , [int]$GlobalTimeout
+      , [string]$ToolVersion
+      , [TimeSpan]$ElapsedTime
+    )
+
+    $totalServers = $Results.Count
+    $criticalCount = ($Results | Where-Object { $_.Status -eq 'Critical' }).Count
+    $warningCount = ($Results | Where-Object { $_.Status -eq 'Warning' }).Count
+    $errorCount = ($Results | Where-Object { $_.Status -eq 'Error' }).Count
+    $healthyCount = ($Results | Where-Object { $_.Status -eq 'Healthy' }).Count
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
+    $machineFqdn = Get-MachineFqdn
+
+    $css = @'
+<style>
+    body { font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f5f5f5; color: #333; }
+    .report-header { background: #1a365d; color: white; padding: 20px 30px; border-radius: 8px 8px 0 0; }
+    .report-header h1 { margin: 0 0 8px 0; font-size: 24px; }
+    .report-header .meta { font-size: 13px; opacity: 0.85; }
+    .summary-bar { display: flex; gap: 16px; padding: 16px 30px; background: white; border-bottom: 1px solid #e0e0e0; flex-wrap: wrap; }
+    .summary-card { padding: 12px 20px; border-radius: 6px; text-align: center; min-width: 100px; }
+    .card-critical { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+    .card-warning { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; }
+    .card-healthy { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    .card-error { background: #e5e7eb; color: #374151; border: 1px solid #9ca3af; }
+    .card-total { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+    .summary-card .count { font-size: 28px; font-weight: bold; }
+    .summary-card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    table { width: 100%; border-collapse: collapse; background: white; }
+    th { background: #f1f5f9; padding: 10px 14px; text-align: left; font-size: 13px; color: #475569; border-bottom: 2px solid #cbd5e1; }
+    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+    tr:hover { background: #f8fafc; }
+    .status-critical { color: #dc2626; font-weight: bold; }
+    .status-warning { color: #ca8a04; font-weight: bold; }
+    .status-healthy { color: #16a34a; font-weight: bold; }
+    .status-error { color: #6b7280; font-weight: bold; }
+    details { margin: 8px 0; background: white; border: 1px solid #e2e8f0; border-radius: 6px; }
+    summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 14px; background: #f8fafc; border-radius: 6px; }
+    summary:hover { background: #f1f5f9; }
+    .detail-body { padding: 16px; }
+    .detail-section { margin-bottom: 16px; }
+    .detail-section h4 { margin: 0 0 8px 0; color: #1e40af; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .detail-table { width: 100%; }
+    .detail-table td { padding: 4px 10px; font-size: 13px; border: none; }
+    .detail-table td:first-child { font-weight: 600; color: #475569; width: 220px; white-space: nowrap; }
+    .cmd-line { background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+    .issue-list { margin: 0; padding-left: 20px; }
+    .issue-list li { margin: 2px 0; font-size: 13px; }
+    .san-list { margin: 0; padding-left: 20px; font-size: 12px; }
+    .footer { padding: 16px 30px; background: white; border-top: 1px solid #e0e0e0; border-radius: 0 0 8px 8px; font-size: 12px; color: #6b7280; }
+    .container { max-width: 1200px; margin: 0 auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; }
+    .warning-list { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 8px 12px; }
+    .warning-list li { color: #92400e; font-size: 12px; }
+</style>
+'@
+
+    $summaryRows = [System.Text.StringBuilder]::new()
+    foreach ($r in $Results) {
+        $statusEmoji = Get-StatusEmoji -Status $r.Status
+        $statusClass = "status-$($r.Status.ToLower())"
+        $statusText = Get-StatusText -Status $r.Status
+
+        $certSubject = if ($r.JsonResult -and $r.JsonResult.certificate) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.certificate.subject) } else { '—' }
+        $expiryDate = if ($r.JsonResult -and $r.JsonResult.certificate) { $r.JsonResult.certificate.validTo.ToString('yyyy-MM-dd') } else { '—' }
+        $daysLeft = if ($r.JsonResult -and $r.JsonResult.certificate) { $r.JsonResult.certificate.daysUntilExpiry } else { '—' }
+        $tlsVersion = if ($r.JsonResult -and $r.JsonResult.tls) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.tls.protocol) } else { '—' }
+        $issueCount = $r.Issues.Count
+
+        [void]$summaryRows.AppendLine("        <tr>")
+        [void]$summaryRows.AppendLine("            <td>$([System.Web.HttpUtility]::HtmlEncode($r.ServerName))</td>")
+        [void]$summaryRows.AppendLine("            <td class=`"$statusClass`">$statusEmoji $statusText</td>")
+        [void]$summaryRows.AppendLine("            <td>$certSubject</td>")
+        [void]$summaryRows.AppendLine("            <td>$expiryDate</td>")
+        [void]$summaryRows.AppendLine("            <td>$daysLeft</td>")
+        [void]$summaryRows.AppendLine("            <td>$tlsVersion</td>")
+        [void]$summaryRows.AppendLine("            <td>$issueCount</td>")
+        [void]$summaryRows.AppendLine("        </tr>")
+    }
+
+    $detailSections = [System.Text.StringBuilder]::new()
+    foreach ($r in $Results) {
+        $statusEmoji = Get-StatusEmoji -Status $r.Status
+        $statusText = Get-StatusText -Status $r.Status
+        $serverEnc = [System.Web.HttpUtility]::HtmlEncode($r.ServerName)
+
+        [void]$detailSections.AppendLine("<details>")
+        [void]$detailSections.AppendLine("    <summary>$statusEmoji $serverEnc — $statusText</summary>")
+        [void]$detailSections.AppendLine("    <div class=`"detail-body`">")
+
+        [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+        [void]$detailSections.AppendLine("            <h4>Command Line</h4>")
+        [void]$detailSections.AppendLine("            <div class=`"cmd-line`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
+        [void]$detailSections.AppendLine("        </div>")
+
+        if ($r.Issues.Count -gt 0) {
+            [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+            [void]$detailSections.AppendLine("            <h4>Issues</h4>")
+            [void]$detailSections.AppendLine("            <ul class=`"issue-list`">")
+            foreach ($issue in $r.Issues) {
+                [void]$detailSections.AppendLine("                <li>$([System.Web.HttpUtility]::HtmlEncode($issue))</li>")
+            }
+            [void]$detailSections.AppendLine("            </ul>")
+            [void]$detailSections.AppendLine("        </div>")
+        }
+
+        if ($r.JsonResult) {
+            $json = $r.JsonResult
+
+            if ($json.connection) {
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>Connection Details</h4>")
+                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
+                $connFields = @(
+                    @('Server', $json.connection.serverName)
+                    @('Resolved Host', $json.connection.resolvedHost)
+                    @('Resolved Port', $json.connection.resolvedPort)
+                    @('Connected IP', $json.connection.connectedIP)
+                    @('Instance Name', $json.connection.instanceName)
+                    @('SQL Server Version', $json.connection.sqlServerVersion)
+                    @('Encryption Mode', $json.connection.encryptionMode)
+                    @('TDS Protocol', $json.connection.tdsProtocol)
+                )
+                foreach ($f in $connFields) {
+                    if ($f[1]) {
+                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
+                    }
+                }
+                [void]$detailSections.AppendLine("            </table>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+
+            if ($json.certificate) {
+                $c = $json.certificate
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>Certificate Details</h4>")
+                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
+                $certFields = @(
+                    @('Subject', $c.subject)
+                    @('Issuer', $c.issuer)
+                    @('Serial Number', $c.serialNumber)
+                    @('Thumbprint (SHA-1)', $c.thumbprintSha1)
+                    @('Fingerprint (SHA-256)', $c.thumbprintSha256)
+                    @('Valid From', $c.validFrom)
+                    @('Valid To', $c.validTo)
+                    @('Days Until Expiry', $c.daysUntilExpiry)
+                    @('Key Algorithm', "$($c.keyAlgorithm) ($($c.keySizeBits) bits)")
+                    @('Signature Algorithm', $c.signatureAlgorithm)
+                    @('Self-Signed', $c.isSelfSigned)
+                )
+                foreach ($f in $certFields) {
+                    if ($null -ne $f[1]) {
+                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
+                    }
+                }
+                if ($c.subjectAlternativeNames -and $c.subjectAlternativeNames.Count -gt 0) {
+                    $sanHtml = ($c.subjectAlternativeNames | ForEach-Object { "<li>$([System.Web.HttpUtility]::HtmlEncode($_))</li>" }) -join ''
+                    [void]$detailSections.AppendLine("            <tr><td>SANs</td><td><ul class=`"san-list`">$sanHtml</ul></td></tr>")
+                }
+                [void]$detailSections.AppendLine("            </table>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+
+            if ($json.tls) {
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>TLS Connection Security</h4>")
+                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
+                $tlsFields = @(
+                    @('Protocol', $json.tls.protocol)
+                    @('Cipher Suite', $json.tls.cipherSuite)
+                    @('Key Exchange', "$($json.tls.keyExchangeAlgorithm) ($($json.tls.keyExchangeStrength) bits)")
+                    @('Hash Algorithm', "$($json.tls.hashAlgorithm) ($($json.tls.hashStrength) bits)")
+                )
+                foreach ($f in $tlsFields) {
+                    if ($f[1]) {
+                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
+                    }
+                }
+                [void]$detailSections.AppendLine("            </table>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+
+            if ($json.warnings -and $json.warnings.Count -gt 0) {
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>Warnings</h4>")
+                [void]$detailSections.AppendLine("            <ul class=`"warning-list`">")
+                foreach ($w in $json.warnings) {
+                    [void]$detailSections.AppendLine("                <li><strong>[$($w.severity)]</strong> $([System.Web.HttpUtility]::HtmlEncode($w.message))</li>")
+                }
+                [void]$detailSections.AppendLine("            </ul>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+
+            if ($json.kerberos -and $json.kerberos.dns) {
+                $dns = $json.kerberos.dns
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>DNS Resolution</h4>")
+                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
+                $dnsFields = @(
+                    @('Requested Hostname', $dns.requestedHostname)
+                    @('Resolved FQDN', $dns.resolvedFqdn)
+                    @('DNS Suffix Used', $dns.dnsSuffixUsed)
+                    @('Record Types', ($dns.dnsRecordTypes -join ', '))
+                    @('Resolved IPs', ($dns.resolvedIpAddresses -join ', '))
+                    @('Reverse Hostname', $dns.reverseHostname)
+                    @('CNAME Target', $dns.cnameTarget)
+                )
+                foreach ($f in $dnsFields) {
+                    if ($f[1]) {
+                        [void]$detailSections.AppendLine("            <tr><td>$($f[0])</td><td>$([System.Web.HttpUtility]::HtmlEncode([string]$f[1]))</td></tr>")
+                    }
+                }
+                [void]$detailSections.AppendLine("            </table>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+
+            if ($json.kerberos -and $json.kerberos.spns -and $json.kerberos.spns.Count -gt 0) {
+                [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+                [void]$detailSections.AppendLine("            <h4>Kerberos SPN Registration</h4>")
+                [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
+                foreach ($spn in $json.kerberos.spns) {
+                    $spnStatus = if ($spn.found) { "REGISTERED &#x2192; $([System.Web.HttpUtility]::HtmlEncode($spn.accountName))" } else { '<span style="color:#dc2626">NOT FOUND</span>' }
+                    [void]$detailSections.AppendLine("            <tr><td>$([System.Web.HttpUtility]::HtmlEncode($spn.label))</td><td><code>$([System.Web.HttpUtility]::HtmlEncode($spn.spn))</code> $spnStatus</td></tr>")
+                }
+                [void]$detailSections.AppendLine("            </table>")
+                [void]$detailSections.AppendLine("        </div>")
+            }
+        }
+        elseif ($r.RawOutput) {
+            [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
+            [void]$detailSections.AppendLine("            <h4>Raw Output</h4>")
+            [void]$detailSections.AppendLine("            <div class=`"cmd-line`">$([System.Web.HttpUtility]::HtmlEncode($r.RawOutput))</div>")
+            [void]$detailSections.AppendLine("        </div>")
+        }
+
+        [void]$detailSections.AppendLine("    </div>")
+        [void]$detailSections.AppendLine("</details>")
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Certificate Health Report</title>
+$css
+</head>
+<body>
+<div class="container">
+    <div class="report-header">
+        <h1>SQL Certificate Health Report</h1>
+        <div class="meta">Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers</div>
+    </div>
+
+    <div class="summary-bar">
+        <div class="summary-card card-total"><div class="count">$totalServers</div><div class="label">Total</div></div>
+        <div class="summary-card card-critical"><div class="count">$criticalCount</div><div class="label">Critical</div></div>
+        <div class="summary-card card-warning"><div class="count">$warningCount</div><div class="label">Warning</div></div>
+        <div class="summary-card card-error"><div class="count">$errorCount</div><div class="label">Error</div></div>
+        <div class="summary-card card-healthy"><div class="count">$healthyCount</div><div class="label">Healthy</div></div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Server</th>
+                <th>Status</th>
+                <th>Certificate Subject</th>
+                <th>Expiry Date</th>
+                <th>Days Left</th>
+                <th>TLS Version</th>
+                <th>Issues</th>
+            </tr>
+        </thead>
+        <tbody>
+$($summaryRows.ToString())
+        </tbody>
+    </table>
+
+    <div style="padding: 20px 30px;">
+        <h2 style="font-size: 18px; color: #1e40af; margin-bottom: 12px;">Server Details</h2>
+$($detailSections.ToString())
+    </div>
+
+    <div class="footer">
+        Execution time: $($ElapsedTime.ToString('hh\:mm\:ss')) |
+        Tool: <code>$([System.Web.HttpUtility]::HtmlEncode($ExeFullPath))</code> |
+        Sent from: <code>$([System.Web.HttpUtility]::HtmlEncode($machineFqdn))</code>
+    </div>
+</div>
+</body>
+</html>
+"@
+
+    return $html
+}
+
+#endregion
+
+#region Email Subject
+
+function Build-EmailSubject {
+    <#
+    .SYNOPSIS
+        Builds a dynamic email subject line reflecting the worst health status.
+    #>
+    param ([array]$Results)
+
+    $criticalCount = ($Results | Where-Object { $_.Status -eq 'Critical' }).Count
+    $warningCount = ($Results | Where-Object { $_.Status -eq 'Warning' }).Count
+    $errorCount = ($Results | Where-Object { $_.Status -eq 'Error' }).Count
+    $date = Get-Date -Format 'yyyy-MM-dd'
+
+    if ($criticalCount -gt 0) {
+        $noun = if ($criticalCount -eq 1) { 'certificate' } else { 'certificates' }
+        return "CRITICAL: $criticalCount $noun expiring — SQL Certificate Health Report — $date"
+    }
+    if ($errorCount -gt 0) {
+        $noun = if ($errorCount -eq 1) { 'server' } else { 'servers' }
+        return "ERROR: $errorCount $noun unreachable — SQL Certificate Health Report — $date"
+    }
+    if ($warningCount -gt 0) {
+        $noun = if ($warningCount -eq 1) { 'issue' } else { 'issues' }
+        return "WARNING: $warningCount $noun found — SQL Certificate Health Report — $date"
+    }
+    return "All Healthy — SQL Certificate Health Report — $date"
+}
+
+#endregion
+
+#region Main Execution
+
+if ($Setup) {
+    Invoke-SmtpSetup
+    return
+}
+
+Add-Type -AssemblyName System.Web
+
+if (-not $InputFile) {
+    Write-Error 'The -InputFile parameter is required unless -Setup is specified.'
+    exit 1
+}
+
+$inputFileResolved = if ([System.IO.Path]::IsPathRooted($InputFile)) { $InputFile } else { Join-Path (Get-Location) $InputFile }
+
+if (-not (Test-Path $inputFileResolved)) {
+    if (Test-Interactive) {
+        Write-Host "Input file not found: $inputFileResolved" -ForegroundColor Yellow
+        $create = Read-Host 'Create a sample file at this location? (Y/N)'
+        if ($create -match '^[Yy]') {
+            $parentDir = Split-Path $inputFileResolved -Parent
+            if (-not (Test-Path $parentDir)) {
+                New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+            }
+            New-SampleInputFile -Path $inputFileResolved
+            Write-Host "Sample file created: $inputFileResolved" -ForegroundColor Green
+            Write-Host 'Edit the file to add your servers (remove the # comment prefix), then re-run.' -ForegroundColor Cyan
+            exit 0
+        }
+    }
+    Write-Error "Input file not found: $inputFileResolved"
+    exit 1
+}
+
+$fileContent = Get-Content -Path $inputFileResolved -Encoding UTF8
+$nonCommentLines = $fileContent | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') }
+if (-not $nonCommentLines -or $nonCommentLines.Count -lt 2) {
+    if (Test-Interactive) {
+        Write-Host "Input file is empty or contains only comments: $inputFileResolved" -ForegroundColor Yellow
+        Write-Host 'Edit the file to add your servers (remove the # comment prefix), then re-run.' -ForegroundColor Cyan
+    }
+    else {
+        Write-Error "Input file is empty or contains only comments: $inputFileResolved"
+    }
+    exit 1
+}
+
+$exeDir = if ([System.IO.Path]::IsPathRooted($ExePath)) { $ExePath } else { Join-Path (Get-Location) $ExePath }
+$exeFullPath = Join-Path $exeDir 'sql-cert-inspector.exe'
+
+if (-not (Test-Path $exeFullPath)) {
+    Write-Error "sql-cert-inspector.exe not found at: $exeFullPath"
+    exit 1
+}
+
+$servers = Read-ServerList -Path $inputFileResolved
+
+if ($WhatIf) {
+    Write-Host ''
+    Write-Host '=== WhatIf Mode — No inspections will be performed ===' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "Input file:   $inputFileResolved"
+    Write-Host "Executable:   $exeFullPath"
+    Write-Host "Server count: $($servers.Count)"
+    if ($Timeout -gt 0) { Write-Host "Global timeout: $Timeout seconds" }
+    Write-Host ''
+
+    $tableData = @()
+    foreach ($s in $servers) {
+        $cmdLine = Format-DisplayCommandLine -ExeFullPath $exeFullPath -Server $s -GlobalTimeout $Timeout
+        $tableData += [PSCustomObject]@{
+            Server  = $s.ServerName
+            Port    = if ($s.Port -gt 0) { $s.Port } else { '(default)' }
+            TDS     = if ($s.TdsVersion) { $s.TdsVersion } else { '7.x' }
+            Timeout = if ($s.Timeout -gt 0) { $s.Timeout } elseif ($Timeout -gt 0) { "$Timeout (global)" } else { '5 (default)' }
+            Command = $cmdLine
+        }
+    }
+
+    $tableData | Format-Table -AutoSize -Wrap
+    Write-Host ''
+    Write-Host 'No actions were taken.' -ForegroundColor Yellow
+    exit 0
+}
+
+$toolVersion = ''
+try {
+    $versionOutput = & $exeFullPath --version 2>&1
+    $toolVersion = ($versionOutput | Select-Object -First 1).Trim()
+}
+catch {
+    $toolVersion = 'unknown'
+}
+
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$results = @()
+
+Write-Host ''
+Write-Host "=== SQL Certificate Health Check ===" -ForegroundColor Cyan
+Write-Host "Inspecting $($servers.Count) server(s)..." -ForegroundColor White
+Write-Host ''
+
+$serverIndex = 0
+foreach ($server in $servers) {
+    $serverIndex++
+    Write-Host "[$serverIndex/$($servers.Count)] $($server.ServerName)..." -NoNewline
+
+    $inspectArgs = Build-InspectorArgs -Server $server -GlobalTimeout $Timeout -IncludeJson
+    $displayCmd = Format-DisplayCommandLine -ExeFullPath $exeFullPath -Server $server -GlobalTimeout $Timeout
+
+    $stdOut = ''
+    $stdErr = ''
+    $exitCode = 0
+    $jsonResult = $null
+
+    try {
+        $procInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $procInfo.FileName = $exeFullPath
+        $procInfo.Arguments = ($inspectArgs | ForEach-Object {
+            if ($_ -match '\s|\\') { "`"$_`"" } else { $_ }
+        }) -join ' '
+        $procInfo.UseShellExecute = $false
+        $procInfo.RedirectStandardOutput = $true
+        $procInfo.RedirectStandardError = $true
+        $procInfo.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($procInfo)
+        $stdOut = $proc.StandardOutput.ReadToEnd()
+        $stdErr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+        $exitCode = $proc.ExitCode
+    }
+    catch {
+        $exitCode = 5
+        $stdErr = $_.Exception.Message
+    }
+
+    if ($exitCode -eq 0 -and $stdOut) {
+        try {
+            $jsonResult = $stdOut | ConvertFrom-Json
+        }
+        catch {
+            $stdErr = "Failed to parse JSON output: $($_.Exception.Message)"
+            $exitCode = 5
+        }
+    }
+
+    $status = Get-HealthStatus -JsonResult $jsonResult -ExitCode $exitCode
+    $issues = Get-IssueList -JsonResult $jsonResult -ExitCode $exitCode -StdErr $stdErr
+
+    $statusColor = switch ($status) {
+        'Critical' { 'Red' }
+        'Warning'  { 'Yellow' }
+        'Healthy'  { 'Green' }
+        'Error'    { 'DarkGray' }
+        default    { 'White' }
+    }
+    Write-Host " $(Get-StatusText -Status $status)" -ForegroundColor $statusColor
+
+    $results += [PSCustomObject]@{
+        ServerName  = $server.ServerName
+        Status      = $status
+        Issues      = $issues
+        JsonResult  = $jsonResult
+        ExitCode    = $exitCode
+        RawOutput   = if (-not $jsonResult) { "$stdOut`n$stdErr".Trim() } else { $null }
+        CommandLine = $displayCmd
+    }
+}
+
+$stopwatch.Stop()
+Write-Host ''
+
+$html = Build-HtmlReport -Results $results -ExeFullPath $exeFullPath -GlobalTimeout $Timeout -ToolVersion $toolVersion -ElapsedTime $stopwatch.Elapsed
+
+if ($OutputPath) {
+    $outputResolved = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location) $OutputPath }
+    $parentDir = Split-Path $outputResolved -Parent
+    if ($parentDir -and -not (Test-Path $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+    $html | Set-Content -Path $outputResolved -Encoding UTF8
+    Write-Host "Report saved to: $outputResolved" -ForegroundColor Green
+}
+
+$hasIssues = ($results | Where-Object { $_.Status -in @('Critical', 'Warning', 'Error') }).Count -gt 0
+$shouldSendEmail = ($hasIssues -or $AlwaysSendEmail)
+
+if ($shouldSendEmail) {
+    $smtpConfig = Get-SmtpConfig
+    if ($smtpConfig) {
+        $smtpPassword = $null
+        if ($smtpConfig.useAuthentication) {
+            $smtpPassword = Get-StoredCredential -Target $script:CredentialTarget
+            if (-not $smtpPassword) {
+                Write-Warning "SMTP authentication is enabled but no credential found in Credential Manager (target: $($script:CredentialTarget)). Run -Setup to configure. Skipping email."
+                $shouldSendEmail = $false
+            }
+        }
+
+        if ($shouldSendEmail) {
+            $emailSubject = Build-EmailSubject -Results $results
+            try {
+                Send-SmtpEmail -Config $smtpConfig -Subject $emailSubject -Body $html -Password $smtpPassword
+                Write-Host "Email sent: $($smtpConfig.toAddress)" -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "Failed to send email: $($_.Exception.Message)"
+            }
+        }
+    }
+    else {
+        if ($AlwaysSendEmail) {
+            Write-Warning "SMTP is not configured. Run with -Setup to configure email delivery."
+        }
+    }
+}
+
+$criticalCount = ($results | Where-Object { $_.Status -eq 'Critical' }).Count
+$warningCount = ($results | Where-Object { $_.Status -eq 'Warning' }).Count
+$errorCount = ($results | Where-Object { $_.Status -eq 'Error' }).Count
+$healthyCount = ($results | Where-Object { $_.Status -eq 'Healthy' }).Count
+
+Write-Host ''
+Write-Host "=== Summary ===" -ForegroundColor Cyan
+Write-Host "  Total:    $($results.Count)"
+if ($criticalCount -gt 0) { Write-Host "  Critical: $criticalCount" -ForegroundColor Red }
+if ($warningCount -gt 0)  { Write-Host "  Warning:  $warningCount" -ForegroundColor Yellow }
+if ($errorCount -gt 0)    { Write-Host "  Error:    $errorCount" -ForegroundColor DarkGray }
+Write-Host "  Healthy:  $healthyCount" -ForegroundColor Green
+Write-Host "  Time:     $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))"
+Write-Host ''
+
+if ($criticalCount -gt 0) { exit 2 }
+if ($errorCount -gt 0) { exit 1 }
+if ($warningCount -gt 0) { exit 3 }
+exit 0
+
+#endregion
