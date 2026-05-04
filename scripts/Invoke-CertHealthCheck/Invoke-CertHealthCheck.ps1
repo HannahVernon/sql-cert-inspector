@@ -1150,7 +1150,7 @@ if (-not (Test-Path $exeFullPath)) {
 
 $servers = Read-ServerList -Path $inputFileResolved
 
-if ($WhatIf) {
+if ($WhatIfPreference) {
     Write-Host ''
     Write-Host '=== WhatIf Mode — No inspections will be performed ===' -ForegroundColor Cyan
     Write-Host ''
