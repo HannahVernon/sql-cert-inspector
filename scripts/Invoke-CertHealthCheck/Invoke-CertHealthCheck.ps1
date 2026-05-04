@@ -986,9 +986,6 @@ function Build-HtmlReport {
     $css = @'
 <style>
     body { font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f5f5f5; color: #333; }
-    .report-header { background: #1a365d; color: white; padding: 20px 30px; border-radius: 8px 8px 0 0; }
-    .report-header h1 { margin: 0 0 8px 0; font-size: 24px; }
-    .report-header .meta { font-size: 13px; opacity: 0.85; }
     .summary-bar { padding: 16px 30px; background: white; border-bottom: 1px solid #e0e0e0; }
     .summary-table { border-collapse: separate; border-spacing: 8px 0; margin: 0 auto; width: auto; }
     .summary-table td { padding: 12px 20px; border-radius: 6px; text-align: center; min-width: 100px; border-bottom: none; }
@@ -1016,7 +1013,6 @@ function Build-HtmlReport {
     .detail-table { width: 100%; }
     .detail-table td { padding: 4px 10px; font-size: 13px; border: none; }
     .detail-table td:first-child { font-weight: 600; color: #475569; width: 220px; white-space: nowrap; }
-    .cmd-line { background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
     .issue-list { margin: 0; padding-left: 20px; }
     .issue-list li { margin: 2px 0; font-size: 13px; }
     .san-list { margin: 0; padding-left: 20px; font-size: 12px; }
@@ -1024,6 +1020,21 @@ function Build-HtmlReport {
     .container { max-width: 1200px; margin: 0 auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; }
     .warning-list { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 8px 12px; }
     .warning-list li { color: #92400e; font-size: 12px; }
+
+    @media (prefers-color-scheme: dark) {
+        body { background: #1a1a2e; color: #e0e0e0; }
+        .summary-bar { background: #16213e; border-bottom-color: #2a3a5c; }
+        table { background: #16213e; }
+        th { background: #1a2744; color: #94a3b8; border-bottom-color: #2a3a5c; }
+        td { border-bottom-color: #2a3a5c; color: #e0e0e0; }
+        tr:hover { background: #1a2744; }
+        details { background: #16213e; border-color: #2a3a5c; }
+        summary { background: #1a2744; color: #e0e0e0; }
+        summary:hover { background: #1e2d4a; }
+        .detail-table td:first-child { color: #94a3b8; }
+        .container { box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+        .footer { background: #16213e; border-top-color: #2a3a5c; color: #94a3b8; }
+    }
 </style>
 '@
 
@@ -1065,7 +1076,7 @@ function Build-HtmlReport {
 
         [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
         [void]$detailSections.AppendLine("            <h4>Command Line</h4>")
-        [void]$detailSections.AppendLine("            <div class=`"cmd-line`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
+        [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.CommandLine))</div>")
         [void]$detailSections.AppendLine("        </div>")
 
         if (@($r.Issues).Count -gt 0) {
@@ -1217,7 +1228,7 @@ function Build-HtmlReport {
         elseif ($r.RawOutput) {
             [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
             [void]$detailSections.AppendLine("            <h4>Raw Output</h4>")
-            [void]$detailSections.AppendLine("            <div class=`"cmd-line`">$([System.Web.HttpUtility]::HtmlEncode($r.RawOutput))</div>")
+            [void]$detailSections.AppendLine("            <div style=`"background: #1e293b; color: #e2e8f0; padding: 10px 14px; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;`">$([System.Web.HttpUtility]::HtmlEncode($r.RawOutput))</div>")
             [void]$detailSections.AppendLine("        </div>")
         }
 
@@ -1236,9 +1247,9 @@ $css
 </head>
 <body>
 <div class="container">
-    <div class="report-header">
-        <h1>SQL Certificate Health Report</h1>
-        <div class="meta">Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers</div>
+    <div style="background: #1a365d; color: #ffffff; padding: 24px 30px; border-radius: 8px 8px 0 0;">
+        <h1 style="margin: 0 0 8px 0; font-size: 24px; color: #ffffff;">SQL Certificate Health Report</h1>
+        <div style="font-size: 13px; color: #cbd5e1;">Generated: $timestamp | Tool: sql-cert-inspector $ToolVersion | Servers: $totalServers</div>
     </div>
 
     <div class="summary-bar">
