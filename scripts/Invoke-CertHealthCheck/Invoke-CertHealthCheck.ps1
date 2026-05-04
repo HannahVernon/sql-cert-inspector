@@ -67,6 +67,24 @@ $script:CredentialTarget = 'Invoke-CertHealthCheck-Smtp'
 
 #region Helper Functions
 
+function Get-SafeProperty {
+    <#
+    .SYNOPSIS
+        Safely gets a property value from a PSCustomObject, returning $null
+        if the property does not exist. Avoids strict mode errors when JSON
+        properties are omitted by WhenWritingNull serialization.
+    #>
+    param (
+        [PSCustomObject]$Object
+      , [string]$Name
+    )
+    if ($null -eq $Object) { return $null }
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        return $Object.$Name
+    }
+    return $null
+}
+
 function Test-Interactive {
     <#
     .SYNOPSIS
@@ -614,26 +632,27 @@ function Get-HealthStatus {
     }
 
     $cert = $JsonResult.certificate
-    $issues = @()
 
-    $daysLeft = $cert.daysUntilExpiry
-    if ($daysLeft -le 0) {
+    $daysLeft = Get-SafeProperty $cert 'daysUntilExpiry'
+    if ($null -ne $daysLeft -and $daysLeft -le 0) {
         return 'Critical'
     }
-    if ($daysLeft -le 7) {
+    if ($null -ne $daysLeft -and $daysLeft -le 7) {
         return 'Critical'
     }
 
-    if ($daysLeft -le 30) {
+    if ($null -ne $daysLeft -and $daysLeft -le 30) {
         $issues += 'Expiring soon'
     }
-    if ($cert.isSelfSigned) {
+    if (Get-SafeProperty $cert 'isSelfSigned') {
         $issues += 'Self-signed'
     }
-    if ($cert.keySizeBits -lt 2048) {
+    $keySize = Get-SafeProperty $cert 'keySizeBits'
+    if ($null -ne $keySize -and $keySize -lt 2048) {
         $issues += 'Weak key'
     }
-    if ($cert.signatureAlgorithm -match '(?i)(sha1|md5)') {
+    $sigAlg = Get-SafeProperty $cert 'signatureAlgorithm'
+    if ($sigAlg -and $sigAlg -match '(?i)(sha1|md5)') {
         $issues += 'Deprecated signature algorithm'
     }
 
@@ -708,30 +727,33 @@ function Get-IssueList {
     }
 
     $cert = $JsonResult.certificate
+    $daysLeft = Get-SafeProperty $cert 'daysUntilExpiry'
 
-    if ($cert.daysUntilExpiry -le 0) {
+    if ($null -ne $daysLeft -and $daysLeft -le 0) {
         $issues += 'Certificate has EXPIRED'
     }
-    elseif ($cert.daysUntilExpiry -le 7) {
-        $issues += "Expires in $($cert.daysUntilExpiry) day(s) — CRITICAL"
+    elseif ($null -ne $daysLeft -and $daysLeft -le 7) {
+        $issues += "Expires in $daysLeft day(s) — CRITICAL"
     }
-    elseif ($cert.daysUntilExpiry -le 30) {
-        $issues += "Expires in $($cert.daysUntilExpiry) day(s)"
+    elseif ($null -ne $daysLeft -and $daysLeft -le 30) {
+        $issues += "Expires in $daysLeft day(s)"
     }
 
-    if ($cert.isSelfSigned) {
+    if (Get-SafeProperty $cert 'isSelfSigned') {
         $issues += 'Self-signed certificate'
     }
-    if ($cert.keySizeBits -lt 2048) {
-        $issues += "Weak key size ($($cert.keySizeBits) bits)"
+    $keySize = Get-SafeProperty $cert 'keySizeBits'
+    if ($null -ne $keySize -and $keySize -lt 2048) {
+        $issues += "Weak key size ($keySize bits)"
     }
-    if ($cert.signatureAlgorithm -match '(?i)(sha1|md5)') {
-        $issues += "Deprecated signature algorithm ($($cert.signatureAlgorithm))"
+    $sigAlg = Get-SafeProperty $cert 'signatureAlgorithm'
+    if ($sigAlg -and $sigAlg -match '(?i)(sha1|md5)') {
+        $issues += "Deprecated signature algorithm ($sigAlg)"
     }
 
     if ($JsonResult.PSObject.Properties.Name -contains 'warnings' -and $JsonResult.warnings) {
         foreach ($w in $JsonResult.warnings) {
-            $issues += $w.message
+            $issues += Get-SafeProperty $w 'message'
         }
     }
 
@@ -814,10 +836,12 @@ function Build-HtmlReport {
         $statusClass = "status-$($r.Status.ToLower())"
         $statusText = Get-StatusText -Status $r.Status
 
-        $certSubject = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.certificate.subject) } else { '—' }
-        $expiryDate = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { $r.JsonResult.certificate.validTo.ToString('yyyy-MM-dd') } else { '—' }
-        $daysLeft = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'certificate') -and $r.JsonResult.certificate) { $r.JsonResult.certificate.daysUntilExpiry } else { '—' }
-        $tlsVersion = if ($r.JsonResult -and ($r.JsonResult.PSObject.Properties.Name -contains 'tls') -and $r.JsonResult.tls) { [System.Web.HttpUtility]::HtmlEncode($r.JsonResult.tls.protocol) } else { '—' }
+        $cert = Get-SafeProperty $r.JsonResult 'certificate'
+        $certSubject = if ($cert) { [System.Web.HttpUtility]::HtmlEncode((Get-SafeProperty $cert 'subject')) } else { '—' }
+        $expiryDate = if ($cert -and (Get-SafeProperty $cert 'validTo')) { ([datetime](Get-SafeProperty $cert 'validTo')).ToString('yyyy-MM-dd') } else { '—' }
+        $daysLeft = if ($cert) { Get-SafeProperty $cert 'daysUntilExpiry' } else { '—' }
+        $tls = Get-SafeProperty $r.JsonResult 'tls'
+        $tlsVersion = if ($tls) { [System.Web.HttpUtility]::HtmlEncode((Get-SafeProperty $tls 'protocol')) } else { '—' }
         $issueCount = @($r.Issues).Count
 
         [void]$summaryRows.AppendLine("        <tr>")
@@ -868,14 +892,14 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("            <h4>Connection Details</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
                 $connFields = @(
-                    ,@('Server', $json.connection.serverName)
-                    ,@('Resolved Host', $json.connection.resolvedHost)
-                    ,@('Resolved Port', $json.connection.resolvedPort)
-                    ,@('Connected IP', $json.connection.connectedIP)
-                    ,@('Instance Name', $json.connection.instanceName)
-                    ,@('SQL Server Version', $json.connection.sqlServerVersion)
-                    ,@('Encryption Mode', $json.connection.encryptionMode)
-                    ,@('TDS Protocol', $json.connection.tdsProtocol)
+                    ,@('Server', (Get-SafeProperty $json.connection 'serverName'))
+                    ,@('Resolved Host', (Get-SafeProperty $json.connection 'resolvedHost'))
+                    ,@('Resolved Port', (Get-SafeProperty $json.connection 'resolvedPort'))
+                    ,@('Connected IP', (Get-SafeProperty $json.connection 'connectedIP'))
+                    ,@('Instance Name', (Get-SafeProperty $json.connection 'instanceName'))
+                    ,@('SQL Server Version', (Get-SafeProperty $json.connection 'sqlServerVersion'))
+                    ,@('Encryption Mode', (Get-SafeProperty $json.connection 'encryptionMode'))
+                    ,@('TDS Protocol', (Get-SafeProperty $json.connection 'tdsProtocol'))
                 )
                 foreach ($f in $connFields) {
                     if ($f[1]) {
@@ -893,17 +917,17 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("            <h4>Certificate Details</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
                 $certFields = @(
-                    ,@('Subject', $c.subject)
-                    ,@('Issuer', $c.issuer)
-                    ,@('Serial Number', $c.serialNumber)
-                    ,@('Thumbprint (SHA-1)', $c.thumbprintSha1)
-                    ,@('Fingerprint (SHA-256)', $c.thumbprintSha256)
-                    ,@('Valid From', $c.validFrom)
-                    ,@('Valid To', $c.validTo)
-                    ,@('Days Until Expiry', $c.daysUntilExpiry)
-                    ,@('Key Algorithm', "$($c.keyAlgorithm) ($($c.keySizeBits) bits)")
-                    ,@('Signature Algorithm', $c.signatureAlgorithm)
-                    ,@('Self-Signed', $c.isSelfSigned)
+                    ,@('Subject', (Get-SafeProperty $c 'subject'))
+                    ,@('Issuer', (Get-SafeProperty $c 'issuer'))
+                    ,@('Serial Number', (Get-SafeProperty $c 'serialNumber'))
+                    ,@('Thumbprint (SHA-1)', (Get-SafeProperty $c 'thumbprintSha1'))
+                    ,@('Fingerprint (SHA-256)', (Get-SafeProperty $c 'thumbprintSha256'))
+                    ,@('Valid From', (Get-SafeProperty $c 'validFrom'))
+                    ,@('Valid To', (Get-SafeProperty $c 'validTo'))
+                    ,@('Days Until Expiry', (Get-SafeProperty $c 'daysUntilExpiry'))
+                    ,@('Key Algorithm', "$(Get-SafeProperty $c 'keyAlgorithm') ($(Get-SafeProperty $c 'keySizeBits') bits)")
+                    ,@('Signature Algorithm', (Get-SafeProperty $c 'signatureAlgorithm'))
+                    ,@('Self-Signed', (Get-SafeProperty $c 'isSelfSigned'))
                 )
                 foreach ($f in $certFields) {
                     if ($null -ne $f[1]) {
@@ -924,10 +948,10 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("            <h4>TLS Connection Security</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
                 $tlsFields = @(
-                    ,@('Protocol', $json.tls.protocol)
-                    ,@('Cipher Suite', $json.tls.cipherSuite)
-                    ,@('Key Exchange', "$($json.tls.keyExchangeAlgorithm) ($($json.tls.keyExchangeStrength) bits)")
-                    ,@('Hash Algorithm', "$($json.tls.hashAlgorithm) ($($json.tls.hashStrength) bits)")
+                    ,@('Protocol', (Get-SafeProperty $json.tls 'protocol'))
+                    ,@('Cipher Suite', (Get-SafeProperty $json.tls 'cipherSuite'))
+                    ,@('Key Exchange', "$(Get-SafeProperty $json.tls 'keyExchangeAlgorithm') ($(Get-SafeProperty $json.tls 'keyExchangeStrength') bits)")
+                    ,@('Hash Algorithm', "$(Get-SafeProperty $json.tls 'hashAlgorithm') ($(Get-SafeProperty $json.tls 'hashStrength') bits)")
                 )
                 foreach ($f in $tlsFields) {
                     if ($f[1]) {
@@ -957,13 +981,13 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("            <h4>DNS Resolution</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
                 $dnsFields = @(
-                    ,@('Requested Hostname', $dns.requestedHostname)
-                    ,@('Resolved FQDN', $dns.resolvedFqdn)
-                    ,@('DNS Suffix Used', $dns.dnsSuffixUsed)
-                    ,@('Record Types', ($dns.dnsRecordTypes -join ', '))
-                    ,@('Resolved IPs', ($dns.resolvedIpAddresses -join ', '))
-                    ,@('Reverse Hostname', $dns.reverseHostname)
-                    ,@('CNAME Target', $dns.cnameTarget)
+                    ,@('Requested Hostname', (Get-SafeProperty $dns 'requestedHostname'))
+                    ,@('Resolved FQDN', (Get-SafeProperty $dns 'resolvedFqdn'))
+                    ,@('DNS Suffix Used', (Get-SafeProperty $dns 'dnsSuffixUsed'))
+                    ,@('Record Types', ((Get-SafeProperty $dns 'dnsRecordTypes') -join ', '))
+                    ,@('Resolved IPs', ((Get-SafeProperty $dns 'resolvedIpAddresses') -join ', '))
+                    ,@('Reverse Hostname', (Get-SafeProperty $dns 'reverseHostname'))
+                    ,@('CNAME Target', (Get-SafeProperty $dns 'cnameTarget'))
                 )
                 foreach ($f in $dnsFields) {
                     if ($f[1]) {
@@ -980,8 +1004,12 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("            <h4>Kerberos SPN Registration</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
                 foreach ($spn in $json.kerberos.spns) {
-                    $spnStatus = if ($spn.found) { "REGISTERED &#x2192; $([System.Web.HttpUtility]::HtmlEncode($spn.accountName))" } else { '<span style="color:#dc2626">NOT FOUND</span>' }
-                    [void]$detailSections.AppendLine("            <tr><td>$([System.Web.HttpUtility]::HtmlEncode($spn.label))</td><td><code>$([System.Web.HttpUtility]::HtmlEncode($spn.spn))</code> $spnStatus</td></tr>")
+                    $spnFound = Get-SafeProperty $spn 'found'
+                    $spnAccount = Get-SafeProperty $spn 'accountName'
+                    $spnLabel = Get-SafeProperty $spn 'label'
+                    $spnValue = Get-SafeProperty $spn 'spn'
+                    $spnStatus = if ($spnFound) { "REGISTERED &#x2192; $([System.Web.HttpUtility]::HtmlEncode($spnAccount))" } else { '<span style="color:#dc2626">NOT FOUND</span>' }
+                    [void]$detailSections.AppendLine("            <tr><td>$([System.Web.HttpUtility]::HtmlEncode($spnLabel))</td><td><code>$([System.Web.HttpUtility]::HtmlEncode($spnValue))</code> $spnStatus</td></tr>")
                 }
                 [void]$detailSections.AppendLine("            </table>")
                 [void]$detailSections.AppendLine("        </div>")
