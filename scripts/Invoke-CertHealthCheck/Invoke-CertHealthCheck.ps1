@@ -1035,26 +1035,25 @@ function Build-HtmlReport {
         $statusText = Get-StatusText -Status $r.Status
 
         $cert = Get-SafeProperty $r.JsonResult 'certificate'
-        $certSubject = if ($cert) { [System.Web.HttpUtility]::HtmlEncode((Get-SafeProperty $cert 'subject')) } else { '—' }
         $expiryDate = if ($cert -and (Get-SafeProperty $cert 'validTo')) { ([datetime](Get-SafeProperty $cert 'validTo')).ToString('yyyy-MM-dd') } else { '—' }
         $daysLeft = if ($cert) { Get-SafeProperty $cert 'daysUntilExpiry' } else { '—' }
-        $tls = Get-SafeProperty $r.JsonResult 'tls'
-        $tlsVersion = if ($tls) { [System.Web.HttpUtility]::HtmlEncode((Get-SafeProperty $tls 'protocol')) } else { '—' }
         $issueCount = @($r.Issues).Count
 
         [void]$summaryRows.AppendLine("        <tr>")
         [void]$summaryRows.AppendLine("            <td>$([System.Web.HttpUtility]::HtmlEncode($r.ServerName))</td>")
         [void]$summaryRows.AppendLine("            <td class=`"$statusClass`">$statusEmoji $statusText</td>")
-        [void]$summaryRows.AppendLine("            <td>$certSubject</td>")
         [void]$summaryRows.AppendLine("            <td>$expiryDate</td>")
         [void]$summaryRows.AppendLine("            <td>$daysLeft</td>")
-        [void]$summaryRows.AppendLine("            <td>$tlsVersion</td>")
         [void]$summaryRows.AppendLine("            <td>$issueCount</td>")
         [void]$summaryRows.AppendLine("        </tr>")
     }
 
     $detailSections = [System.Text.StringBuilder]::new()
-    foreach ($r in $Results) {
+    $nonHealthy = @($Results | Where-Object { $_.Status -ne 'Healthy' })
+    if ($nonHealthy.Count -eq 0) {
+        [void]$detailSections.AppendLine("<p style=`"color: #166534; font-style: italic;`">All servers are healthy — no details to display.</p>")
+    }
+    foreach ($r in $nonHealthy) {
         Write-Verbose "  Detail section: $($r.ServerName)"
         $statusEmoji = Get-StatusEmoji -Status $r.Status
         $statusText = Get-StatusText -Status $r.Status
@@ -1257,10 +1256,8 @@ $css
             <tr>
                 <th>Server</th>
                 <th>Status</th>
-                <th>Certificate Subject</th>
                 <th>Expiry Date</th>
                 <th>Days Left</th>
-                <th>TLS Version</th>
                 <th>Issues</th>
             </tr>
         </thead>
