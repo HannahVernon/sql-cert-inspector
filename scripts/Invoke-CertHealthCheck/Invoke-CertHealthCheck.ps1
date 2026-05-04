@@ -55,6 +55,9 @@ param (
     [switch]$AlwaysSendEmail
 
   , [Parameter()]
+    [switch]$ValidateDns
+
+  , [Parameter()]
     [switch]$Setup
 )
 
@@ -508,13 +511,19 @@ function Read-ServerList {
         Parses the pipe-delimited input file into an array of server objects.
         Validates all fields defensively and skips malformed lines with warnings.
     #>
-    param ([string]$Path)
+    param (
+        [string]$Path
+      , [switch]$ValidateDns
+    )
 
     $maxLineLength = 1024
     $maxServerNameLength = 255
     $validTdsVersions = @('', 'tds7', 'tds8')
-    # Hostname chars: alphanumeric, dots, hyphens, backslash (for instances), underscores
-    $validServerNamePattern = '^[a-zA-Z0-9._\\-]+$'
+
+    # Valid hostname: starts with letter, alphanumeric/hyphens/dots, ends with alphanumeric. Min 2 chars.
+    $validHostnamePattern = '^[a-zA-Z][a-zA-Z0-9.-]*[a-zA-Z0-9]$'
+    # Valid IPv4: four octets 0-255
+    $validIpv4Pattern = '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
 
     $lines = Get-Content -Path $Path -Encoding UTF8
 
@@ -562,14 +571,94 @@ function Read-ServerList {
                 continue
             }
 
-            if ($serverName -notmatch $validServerNamePattern) {
-                Write-Warning "Skipping line $lineNum — server name '$serverName' contains invalid characters (spaces, semicolons, brackets, etc. are not allowed)."
+            # Detect forward-slash typo: server/INSTANCE instead of server\INSTANCE
+            if ($serverName.Contains('/') -and -not $serverName.Contains('\')) {
+                $corrected = $serverName.Replace('/', '\')
+                Write-Warning "Line $lineNum — '$serverName' uses forward-slash. Did you mean '$corrected'? Auto-correcting."
+                $serverName = $corrected
+            }
+
+            # Parse server name into host, instance, and comma-port components.
+            # Supported formats:
+            #   hostname
+            #   hostname\INSTANCE
+            #   hostname,port
+            #   hostname\INSTANCE,port   (port from comma overrides port column)
+            #   192.168.0.1
+            #   192.168.0.1\INSTANCE
+            #   192.168.0.1,port
+            $hostPart = $serverName
+            $instancePart = $null
+            $commaPort = $null
+
+            # Extract instance name (before comma-port, if any)
+            if ($hostPart.Contains('\')) {
+                $bsIndex = $hostPart.IndexOf('\')
+                $instancePart = $hostPart.Substring($bsIndex + 1)
+                $hostPart = $hostPart.Substring(0, $bsIndex)
+
+                # Instance name might contain comma-port: INSTANCE,port
+                if ($instancePart.Contains(',')) {
+                    $commaIndex = $instancePart.IndexOf(',')
+                    $commaPort = $instancePart.Substring($commaIndex + 1)
+                    $instancePart = $instancePart.Substring(0, $commaIndex)
+                }
+            }
+            elseif ($hostPart.Contains(',')) {
+                # host,port format (no instance)
+                $commaIndex = $hostPart.IndexOf(',')
+                $commaPort = $hostPart.Substring($commaIndex + 1)
+                $hostPart = $hostPart.Substring(0, $commaIndex)
+            }
+
+            # Validate host part: must be a valid hostname or IPv4 address
+            if ($hostPart.Length -lt 2) {
+                Write-Warning "Skipping line $lineNum — server name '$serverName' is too short (host part must be at least 2 characters)."
                 $skippedCount++
                 continue
             }
 
+            $isValidHostname = $hostPart -match $validHostnamePattern
+            $isValidIpv4 = $false
+            if ($hostPart -match $validIpv4Pattern) {
+                $octets = $hostPart.Split('.')
+                $isValidIpv4 = ($octets | Where-Object { $_ -as [int] -ne $null -and [int]$_ -ge 0 -and [int]$_ -le 255 }).Count -eq 4
+            }
+
+            if (-not $isValidHostname -and -not $isValidIpv4) {
+                Write-Warning "Skipping line $lineNum — '$hostPart' is not a valid hostname or IPv4 address."
+                $skippedCount++
+                continue
+            }
+
+            # Validate instance name if present (alphanumeric and underscores only)
+            if ($instancePart -and $instancePart -notmatch '^[a-zA-Z0-9_]+$') {
+                Write-Warning "Skipping line $lineNum — invalid instance name '$instancePart' for server '$hostPart'."
+                $skippedCount++
+                continue
+            }
+
+            # Determine port: comma-port in server name takes priority over port column
             $portValue = 0
-            if ($parts.Count -gt 1 -and $parts[1].Trim()) {
+            if ($commaPort) {
+                $portParsed = 0
+                if (-not [int]::TryParse($commaPort, [ref]$portParsed) -or $portParsed -lt 1 -or $portParsed -gt 65535) {
+                    Write-Warning "Skipping line $lineNum — invalid comma-port '$commaPort' in server name '$serverName'. Must be 1-65535."
+                    $skippedCount++
+                    continue
+                }
+                $portValue = $portParsed
+
+                # Rebuild server name without comma-port (port goes to dedicated field)
+                if ($instancePart) {
+                    $serverName = "$hostPart\$instancePart"
+                }
+                else {
+                    $serverName = $hostPart
+                }
+            }
+
+            if ($portValue -eq 0 -and $parts.Count -gt 1 -and $parts[1].Trim()) {
                 $portParsed = 0
                 if (-not [int]::TryParse($parts[1].Trim(), [ref]$portParsed) -or $portParsed -lt 0 -or $portParsed -gt 65535) {
                     Write-Warning "Skipping line $lineNum — invalid port '$($parts[1].Trim())' for server '$serverName'. Must be 0-65535."
@@ -598,6 +687,17 @@ function Read-ServerList {
                     continue
                 }
                 $timeoutValue = $timeoutParsed
+            }
+
+            # DNS pre-flight check (opt-in, warn-only)
+            if ($ValidateDns) {
+                try {
+                    [void][System.Net.Dns]::GetHostEntry($hostPart)
+                    Write-Verbose "DNS resolved: $hostPart"
+                }
+                catch {
+                    Write-Warning "Line $lineNum — DNS resolution failed for '$hostPart'. Server will still be inspected but may fail to connect."
+                }
             }
 
             $entry = [PSCustomObject]@{
@@ -1283,7 +1383,7 @@ if (-not (Test-Path $exeFullPath)) {
     exit 1
 }
 
-$servers = Read-ServerList -Path $inputFileResolved
+$servers = Read-ServerList -Path $inputFileResolved -ValidateDns:$ValidateDns
 Write-Verbose "Loaded $($servers.Count) server(s) from $inputFileResolved"
 
 if ($WhatIfPreference) {
