@@ -321,6 +321,18 @@ function Invoke-Setup {
     Write-Host '--- sql-cert-inspector Location ---' -ForegroundColor White
     $exePathDefault = if ($existing -and ($existing.PSObject.Properties.Name -contains 'exePath') -and $existing.exePath) { $existing.exePath } else { '.' }
     $exePathInput = Read-HostWithDefault -Prompt 'Directory containing sql-cert-inspector.exe' -Default $exePathDefault
+
+    if ($exePathInput -match '(?i)sql-cert-inspector(\.exe)?$') {
+        $trimmedDir = Split-Path $exePathInput -Parent
+        $trimmedExe = Join-Path $trimmedDir 'sql-cert-inspector.exe'
+        $trimmedResolved = if ([System.IO.Path]::IsPathRooted($trimmedDir)) { $trimmedDir } else { Join-Path (Get-Location) $trimmedDir }
+        $trimmedExeResolved = Join-Path $trimmedResolved 'sql-cert-inspector.exe'
+        if (Test-Path $trimmedExeResolved) {
+            Write-Host "  Note: You specified the full executable path. Using the directory instead: $trimmedDir" -ForegroundColor Yellow
+            $exePathInput = $trimmedDir
+        }
+    }
+
     $exePathResolved = if ([System.IO.Path]::IsPathRooted($exePathInput)) { $exePathInput } else { Join-Path (Get-Location) $exePathInput }
     $testExe = Join-Path $exePathResolved 'sql-cert-inspector.exe'
     if (Test-Path $testExe) {
@@ -1122,6 +1134,10 @@ if ($effectiveExePath -eq '.' -and -not $PSBoundParameters.ContainsKey('ExePath'
     if ($savedConfig -and ($savedConfig.PSObject.Properties.Name -contains 'exePath') -and $savedConfig.exePath) {
         $effectiveExePath = $savedConfig.exePath
     }
+}
+
+if ($effectiveExePath -match '(?i)sql-cert-inspector(\.exe)?$') {
+    $effectiveExePath = Split-Path $effectiveExePath -Parent
 }
 
 $exeDir = if ([System.IO.Path]::IsPathRooted($effectiveExePath)) { $effectiveExePath } else { Join-Path (Get-Location) $effectiveExePath }
