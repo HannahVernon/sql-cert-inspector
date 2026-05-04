@@ -643,6 +643,7 @@ function Get-HealthStatus {
         return 'Critical'
     }
 
+    $issues = @()
     if ($null -ne $daysLeft -and $daysLeft -le 30) {
         $issues += 'Expiring soon'
     }
