@@ -67,6 +67,14 @@
 | `OutputFileHelper.cs` | Generates output filenames from `--server` values by replacing illegal filename characters (`\/:*?"<>\|`) with hyphens. |
 | `Directory.Build.props` | Configures MinVer for automatic version derivation from git tags. |
 
+### Scripts
+
+| File | Responsibility |
+|------|----------------|
+| `scripts/Invoke-CertHealthCheck/Invoke-CertHealthCheck.ps1` | PowerShell script for automated batch certificate health checks. Reads a pipe-delimited server list, runs `sql-cert-inspector --json` against each server sequentially, classifies health (Critical/Warning/Healthy/Error), generates a self-contained HTML report, and optionally emails it via SMTP. |
+| `scripts/Invoke-CertHealthCheck/sample-servers.txt` | Example pipe-delimited input file with commented-out sample entries. |
+| `scripts/Invoke-CertHealthCheck/README.md` | Usage documentation for the health check script. |
+
 ## Key Design Decisions
 
 ### No-Auth Certificate Extraction
