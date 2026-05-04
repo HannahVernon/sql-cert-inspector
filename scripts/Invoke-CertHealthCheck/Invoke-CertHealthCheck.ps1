@@ -116,22 +116,25 @@ function Initialize-CredManagerNative {
         Returns the type containing the static methods.
     #>
     if (-not ('CredManagerNative.Api' -as [Type])) {
+        # String fields are declared as IntPtr for .NET 7+ compatibility.
+        # PtrToStructure requires blittable structs; managed string fields
+        # are not blittable and throw on modern runtimes.
         $sig = @'
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+[StructLayout(LayoutKind.Sequential)]
 public struct CREDENTIAL
 {
     public uint Flags;
     public uint Type;
-    public string TargetName;
-    public string Comment;
+    public IntPtr TargetName;
+    public IntPtr Comment;
     public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
     public uint CredentialBlobSize;
     public IntPtr CredentialBlob;
     public uint Persist;
     public uint AttributeCount;
     public IntPtr Attributes;
-    public string TargetAlias;
-    public string UserName;
+    public IntPtr TargetAlias;
+    public IntPtr UserName;
 }
 
 [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -205,11 +208,14 @@ function Set-StoredCredential {
 
     $cred = New-Object CredManagerNative.Api+CREDENTIAL
     $cred.Type = 1          <# CRED_TYPE_GENERIC #>
-    $cred.TargetName = $Target
-    $cred.UserName = $Username
     $cred.Persist = 2       <# CRED_PERSIST_LOCAL_MACHINE #>
     $cred.CredentialBlobSize = [uint32]$passwordBytes.Length
     $cred.CredentialBlob = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($passwordBytes.Length)
+
+    $pTarget   = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($Target)
+    $pUsername  = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($Username)
+    $cred.TargetName = $pTarget
+    $cred.UserName   = $pUsername
 
     try {
         [System.Runtime.InteropServices.Marshal]::Copy($passwordBytes, 0, $cred.CredentialBlob, $passwordBytes.Length)
@@ -222,6 +228,8 @@ function Set-StoredCredential {
     }
     finally {
         [System.Runtime.InteropServices.Marshal]::FreeHGlobal($cred.CredentialBlob)
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pTarget)
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pUsername)
     }
 }
 
