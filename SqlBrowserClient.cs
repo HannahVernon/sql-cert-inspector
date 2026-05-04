@@ -105,6 +105,11 @@ public static class SqlBrowserClient
     private static int QueryBrowserParallel(IPAddress[] addresses, string host, string instanceName, int timeoutSeconds)
     {
         byte[] request = BuildInstanceRequest(instanceName);
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(
+            Math.Clamp((timeoutSeconds + 5) * 1000, 5000, 125000)));
+
         var tasks = new Task<byte[]?>[addresses.Length];
 
         for (int i = 0; i < addresses.Length; i++)
@@ -126,19 +131,28 @@ public static class SqlBrowserClient
                 {
                     return null;
                 }
-            });
+            }, cts.Token);
         }
 
-        /* Wait for all tasks with an explicit timeout as a safety net.
-           Individual tasks are bounded by ReceiveTimeout, but we add a ceiling
-           to guard against platform-level hangs (security audit P2). */
-        int waitMilliseconds = Math.Clamp((timeoutSeconds + 5) * 1000, 5000, 125000);
-        Task.WaitAll(tasks, waitMilliseconds);
+        /* Wait for all tasks, checking completed ones for a valid result.
+           CancellationToken ensures tasks don't outlive the timeout. */
+        try
+        {
+            Task.WaitAll(tasks, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            /* Timeout expired — fall through and check whatever completed */
+        }
+        catch (AggregateException)
+        {
+            /* One or more tasks faulted — fall through and check completed ones */
+        }
 
         /* Use the first successful response */
         foreach (var task in tasks)
         {
-            if (task.Result != null)
+            if (task.IsCompletedSuccessfully && task.Result != null)
             {
                 return ParseInstanceResponse(task.Result, host, instanceName);
             }

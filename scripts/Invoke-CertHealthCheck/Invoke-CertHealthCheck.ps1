@@ -1222,8 +1222,23 @@ foreach ($server in $servers) {
         $proc = [System.Diagnostics.Process]::Start($procInfo)
         $stdOut = $proc.StandardOutput.ReadToEnd()
         $stdErr = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
-        $exitCode = $proc.ExitCode
+
+        /* Compute per-server timeout for WaitForExit: use server-specific,
+           then global, then default of 30 seconds. Add 10s grace period
+           beyond the exe's own --timeout to allow clean exit. */
+        $serverTimeout = if ($server.Timeout -gt 0) { $server.Timeout } elseif ($Timeout -gt 0) { $Timeout } else { 30 }
+        $waitMs = ($serverTimeout + 10) * 1000
+
+        if (-not $proc.WaitForExit($waitMs)) {
+            try { $proc.Kill() } catch { }
+            $exitCode = 124
+            $stdErr = "Process timed out after $($serverTimeout + 10) seconds and was terminated."
+        }
+        else {
+            $exitCode = $proc.ExitCode
+        }
+
+        $proc.Dispose()
     }
     catch {
         $exitCode = 5

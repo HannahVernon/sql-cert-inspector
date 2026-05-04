@@ -89,6 +89,19 @@ public sealed class TdsPreloginStream : Stream
         _innerStream.Flush();
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        /* Do NOT dispose _innerStream — it is owned by the caller (TdsPreloginClient).
+           We only clean up our own read buffer to release memory. */
+        if (disposing)
+        {
+            _readBuffer = Array.Empty<byte>();
+            _readOffset = 0;
+            _readCount = 0;
+        }
+        base.Dispose(disposing);
+    }
+
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
 }
