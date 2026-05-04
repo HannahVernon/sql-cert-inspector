@@ -116,9 +116,8 @@ function Initialize-CredManagerNative {
         Returns the type containing the static methods.
     #>
     if (-not ('CredManagerNative.Api' -as [Type])) {
-        # String fields are declared as IntPtr for .NET 7+ compatibility.
-        # PtrToStructure requires blittable structs; managed string fields
-        # are not blittable and throw on modern runtimes.
+        # All fields are primitive/IntPtr for .NET 7+ blittability.
+        # FILETIME replaced with two uint fields to avoid ComTypes dependency.
         $sig = @'
 [StructLayout(LayoutKind.Sequential)]
 public struct CREDENTIAL
@@ -127,7 +126,8 @@ public struct CREDENTIAL
     public uint Type;
     public IntPtr TargetName;
     public IntPtr Comment;
-    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint LastWrittenLow;
+    public uint LastWrittenHigh;
     public uint CredentialBlobSize;
     public IntPtr CredentialBlob;
     public uint Persist;
@@ -161,6 +161,7 @@ function Get-StoredCredential {
     <#
     .SYNOPSIS
         Retrieves the SMTP credential from Windows Credential Manager via P/Invoke.
+        Uses manual Marshal offset reads to avoid PtrToStructure blittability issues.
     #>
     param ([string]$Target)
 
@@ -173,10 +174,19 @@ function Get-StoredCredential {
     }
 
     try {
-        $cred = [System.Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [CredManagerNative.Api+CREDENTIAL])
-        if ($cred.CredentialBlobSize -gt 0) {
-            $rawBytes = New-Object byte[] $cred.CredentialBlobSize
-            [System.Runtime.InteropServices.Marshal]::Copy($cred.CredentialBlob, $rawBytes, 0, $cred.CredentialBlobSize)
+        # Read CredentialBlobSize and CredentialBlob at their struct offsets.
+        # CREDENTIAL layout (x64): Flags(4) Type(4) TargetName(8) Comment(8)
+        #   LastWritten(8) CredentialBlobSize(4) pad(4) CredentialBlob(8)
+        $ptrSize = [IntPtr]::Size
+        $blobSizeOffset = 4 + 4 + $ptrSize + $ptrSize + 8   <# 24 on x86, 32 on x64 #>
+        $blobPtrOffset  = $blobSizeOffset + 4
+        if ($ptrSize -eq 8) { $blobPtrOffset += 4 }         <# alignment padding on x64 #>
+
+        $blobSize = [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr, $blobSizeOffset)
+        if ($blobSize -gt 0) {
+            $blobPtr = [System.Runtime.InteropServices.Marshal]::ReadIntPtr($ptr, $blobPtrOffset)
+            $rawBytes = New-Object byte[] $blobSize
+            [System.Runtime.InteropServices.Marshal]::Copy($blobPtr, $rawBytes, 0, $blobSize)
             $passwordText = [System.Text.Encoding]::Unicode.GetString($rawBytes)
             $securePass = ConvertTo-SecureString $passwordText -AsPlainText -Force
             return $securePass
