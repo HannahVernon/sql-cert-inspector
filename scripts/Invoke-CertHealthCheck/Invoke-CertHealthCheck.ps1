@@ -609,7 +609,7 @@ function Get-HealthStatus {
         return 'Error'
     }
 
-    if (-not $JsonResult -or -not $JsonResult.certificate) {
+    if (-not $JsonResult -or -not ($JsonResult.PSObject.Properties.Name -contains 'certificate') -or -not $JsonResult.certificate) {
         return 'Error'
     }
 
@@ -637,7 +637,7 @@ function Get-HealthStatus {
         $issues += 'Deprecated signature algorithm'
     }
 
-    if ($JsonResult.warnings) {
+    if ($JsonResult.PSObject.Properties.Name -contains 'warnings' -and $JsonResult.warnings) {
         $issues += $JsonResult.warnings | ForEach-Object { $_.message }
     }
 
@@ -702,7 +702,7 @@ function Get-IssueList {
         return $issues
     }
 
-    if (-not $JsonResult -or -not $JsonResult.certificate) {
+    if (-not $JsonResult -or -not ($JsonResult.PSObject.Properties.Name -contains 'certificate') -or -not $JsonResult.certificate) {
         $issues += 'No certificate data returned'
         return $issues
     }
@@ -729,7 +729,7 @@ function Get-IssueList {
         $issues += "Deprecated signature algorithm ($($cert.signatureAlgorithm))"
     }
 
-    if ($JsonResult.warnings) {
+    if ($JsonResult.PSObject.Properties.Name -contains 'warnings' -and $JsonResult.warnings) {
         foreach ($w in $JsonResult.warnings) {
             $issues += $w.message
         }
@@ -858,7 +858,7 @@ function Build-HtmlReport {
         if ($r.JsonResult) {
             $json = $r.JsonResult
 
-            if ($json.connection) {
+            if ($json.PSObject.Properties.Name -contains 'connection' -and $json.connection) {
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Connection Details</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
@@ -881,7 +881,7 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.certificate) {
+            if ($json.PSObject.Properties.Name -contains 'certificate' -and $json.certificate) {
                 $c = $json.certificate
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Certificate Details</h4>")
@@ -912,7 +912,7 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.tls) {
+            if ($json.PSObject.Properties.Name -contains 'tls' -and $json.tls) {
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>TLS Connection Security</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
@@ -931,7 +931,7 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.warnings -and $json.warnings.Count -gt 0) {
+            if ($json.PSObject.Properties.Name -contains 'warnings' -and $json.warnings -and $json.warnings.Count -gt 0) {
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Warnings</h4>")
                 [void]$detailSections.AppendLine("            <ul class=`"warning-list`">")
@@ -942,7 +942,7 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.kerberos -and $json.kerberos.dns) {
+            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'dns' -and $json.kerberos.dns) {
                 $dns = $json.kerberos.dns
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>DNS Resolution</h4>")
@@ -965,7 +965,7 @@ function Build-HtmlReport {
                 [void]$detailSections.AppendLine("        </div>")
             }
 
-            if ($json.kerberos -and $json.kerberos.spns -and $json.kerberos.spns.Count -gt 0) {
+            if ($json.PSObject.Properties.Name -contains 'kerberos' -and $json.kerberos -and $json.kerberos.PSObject.Properties.Name -contains 'spns' -and $json.kerberos.spns -and $json.kerberos.spns.Count -gt 0) {
                 [void]$detailSections.AppendLine("        <div class=`"detail-section`">")
                 [void]$detailSections.AppendLine("            <h4>Kerberos SPN Registration</h4>")
                 [void]$detailSections.AppendLine("            <table class=`"detail-table`">")
