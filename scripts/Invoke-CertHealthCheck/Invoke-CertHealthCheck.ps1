@@ -689,14 +689,16 @@ function Read-ServerList {
                 $timeoutValue = $timeoutParsed
             }
 
-            # DNS pre-flight check (opt-in, warn-only)
+            # DNS pre-flight check (opt-in, skip on failure)
             if ($ValidateDns) {
                 try {
                     [void][System.Net.Dns]::GetHostEntry($hostPart)
                     Write-Verbose "DNS resolved: $hostPart"
                 }
                 catch {
-                    Write-Warning "Line $lineNum — DNS resolution failed for '$hostPart'. Server will still be inspected but may fail to connect."
+                    Write-Warning "Skipping line $lineNum — DNS resolution failed for '$hostPart'. Check the hostname or remove -ValidateDns to skip this check."
+                    $skippedCount++
+                    continue
                 }
             }
 
