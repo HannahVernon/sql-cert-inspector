@@ -91,55 +91,86 @@ function Get-SmtpConfig {
     return $null
 }
 
-function Get-StoredCredential {
+function Initialize-CredManagerNative {
     <#
     .SYNOPSIS
-        Retrieves the SMTP credential from Windows Credential Manager via cmdkey / vault.
+        Loads the native Credential Manager P/Invoke signatures (advapi32.dll).
+        Returns the type containing the static methods.
     #>
-    param ([string]$Target)
+    if (-not ('CredManagerNative.Api' -as [Type])) {
+        $sig = @'
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct CREDENTIAL
+{
+    public uint Flags;
+    public uint Type;
+    public string TargetName;
+    public string Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint CredentialBlobSize;
+    public IntPtr CredentialBlob;
+    public uint Persist;
+    public uint AttributeCount;
+    public IntPtr Attributes;
+    public string TargetAlias;
+    public string UserName;
+}
 
-    $sig = @'
 [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern bool CredRead(
-    string target,
-    int type,
-    int reservedFlag,
-    out IntPtr credentialPtr);
+    string target, uint type, uint reservedFlag, out IntPtr credentialPtr);
+
+[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool CredWrite(
+    ref CREDENTIAL credential, uint flags);
+
+[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool CredDelete(
+    string target, uint type, uint flags);
 
 [DllImport("advapi32.dll")]
 public static extern void CredFree(IntPtr cred);
 '@
-    $advapi = Add-Type -MemberDefinition $sig -Namespace 'CredManager' -Name 'NativeMethods' -PassThru
+        Add-Type -MemberDefinition $sig -Namespace 'CredManagerNative' -Name 'Api'
+    }
+    return [CredManagerNative.Api]
+}
+
+function Get-StoredCredential {
+    <#
+    .SYNOPSIS
+        Retrieves the SMTP credential from Windows Credential Manager via P/Invoke.
+    #>
+    param ([string]$Target)
+
+    $api = Initialize-CredManagerNative
 
     $ptr = [IntPtr]::Zero
-    $success = $advapi::CredRead($Target, 1, 0, [ref]$ptr)
+    $success = $api::CredRead($Target, 1, 0, [ref]$ptr)
     if (-not $success) {
         return $null
     }
 
     try {
-        $cred = [System.Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [Type]::GetType('CredManager.NativeMethods'))
-        $rawBytes = New-Object byte[] 512
-        [System.Runtime.InteropServices.Marshal]::Copy(
-            [System.Runtime.InteropServices.Marshal]::ReadIntPtr($ptr, 24),
-            $rawBytes,
-            0,
-            [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr, 16)
-        )
-        $size = [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr, 16)
-        $passwordText = [System.Text.Encoding]::Unicode.GetString($rawBytes, 0, $size)
-        $securePass = ConvertTo-SecureString $passwordText -AsPlainText -Force
-        return $securePass
+        $cred = [System.Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [CredManagerNative.Api+CREDENTIAL])
+        if ($cred.CredentialBlobSize -gt 0) {
+            $rawBytes = New-Object byte[] $cred.CredentialBlobSize
+            [System.Runtime.InteropServices.Marshal]::Copy($cred.CredentialBlob, $rawBytes, 0, $cred.CredentialBlobSize)
+            $passwordText = [System.Text.Encoding]::Unicode.GetString($rawBytes)
+            $securePass = ConvertTo-SecureString $passwordText -AsPlainText -Force
+            return $securePass
+        }
+        return $null
     }
     finally {
-        $advapi::CredFree($ptr)
+        $api::CredFree($ptr)
     }
 }
 
 function Set-StoredCredential {
     <#
     .SYNOPSIS
-        Stores SMTP credential in Windows Credential Manager via cmdkey.
+        Stores SMTP credential in Windows Credential Manager via P/Invoke.
     #>
     param (
         [string]$Target
@@ -147,29 +178,44 @@ function Set-StoredCredential {
       , [SecureString]$Password
     )
 
+    $api = Initialize-CredManagerNative
+
     $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
     )
+    $passwordBytes = [System.Text.Encoding]::Unicode.GetBytes($plain)
 
-    $process = Start-Process -FilePath 'cmdkey.exe' `
-        -ArgumentList "/generic:$Target", "/user:$Username", "/pass:$plain" `
-        -NoNewWindow -Wait -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'
+    $cred = New-Object CredManagerNative.Api+CREDENTIAL
+    $cred.Type = 1          <# CRED_TYPE_GENERIC #>
+    $cred.TargetName = $Target
+    $cred.UserName = $Username
+    $cred.Persist = 2       <# CRED_PERSIST_LOCAL_MACHINE #>
+    $cred.CredentialBlobSize = [uint32]$passwordBytes.Length
+    $cred.CredentialBlob = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($passwordBytes.Length)
 
-    if ($process.ExitCode -ne 0) {
-        throw "Failed to store credential in Windows Credential Manager (exit code $($process.ExitCode))."
+    try {
+        [System.Runtime.InteropServices.Marshal]::Copy($passwordBytes, 0, $cred.CredentialBlob, $passwordBytes.Length)
+
+        $success = $api::CredWrite([ref]$cred, 0)
+        if (-not $success) {
+            $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "Failed to store credential in Windows Credential Manager (Win32 error $errorCode)."
+        }
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($cred.CredentialBlob)
     }
 }
 
 function Remove-StoredCredential {
     <#
     .SYNOPSIS
-        Removes a credential from Windows Credential Manager.
+        Removes a credential from Windows Credential Manager via P/Invoke.
     #>
     param ([string]$Target)
 
-    Start-Process -FilePath 'cmdkey.exe' `
-        -ArgumentList "/delete:$Target" `
-        -NoNewWindow -Wait -PassThru -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL' | Out-Null
+    $api = Initialize-CredManagerNative
+    $api::CredDelete($Target, 1, 0) | Out-Null
 }
 
 function Read-HostWithDefault {
