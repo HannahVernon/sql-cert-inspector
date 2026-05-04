@@ -319,7 +319,7 @@ function Invoke-Setup {
     $existing = Get-SmtpConfig
 
     Write-Host '--- sql-cert-inspector Location ---' -ForegroundColor White
-    $exePathDefault = if ($existing -and $existing.exePath) { $existing.exePath } else { '.' }
+    $exePathDefault = if ($existing -and ($existing.PSObject.Properties.Name -contains 'exePath') -and $existing.exePath) { $existing.exePath } else { '.' }
     $exePathInput = Read-HostWithDefault -Prompt 'Directory containing sql-cert-inspector.exe' -Default $exePathDefault
     $exePathResolved = if ([System.IO.Path]::IsPathRooted($exePathInput)) { $exePathInput } else { Join-Path (Get-Location) $exePathInput }
     $testExe = Join-Path $exePathResolved 'sql-cert-inspector.exe'
@@ -1119,7 +1119,7 @@ if (-not $nonCommentLines -or $nonCommentLines.Count -lt 2) {
 $effectiveExePath = $ExePath
 if ($effectiveExePath -eq '.' -and -not $PSBoundParameters.ContainsKey('ExePath')) {
     $savedConfig = Get-SmtpConfig
-    if ($savedConfig -and $savedConfig.exePath) {
+    if ($savedConfig -and ($savedConfig.PSObject.Properties.Name -contains 'exePath') -and $savedConfig.exePath) {
         $effectiveExePath = $savedConfig.exePath
     }
 }
