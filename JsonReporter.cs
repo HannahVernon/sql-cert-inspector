@@ -130,7 +130,8 @@ public static class JsonReporter
                     Spn = e.Spn,
                     Found = e.Result?.Found ?? false,
                     AccountName = e.Result?.AccountName,
-                    AccountType = e.Result?.AccountType
+                    AccountType = e.Result?.AccountType,
+                    SupportedEncryptionTypes = e.Result?.SupportedEncryptionTypes
                 }).ToList(),
                 SpnLookupError = info.Kerberos.SpnLookupError,
                 SanSpnCoverage = info.Kerberos.SanSpnCoverage?.Select(s => new SanSpnJson
@@ -147,7 +148,8 @@ public static class JsonReporter
                     Spn = e.Spn,
                     Found = e.Result?.Found ?? false,
                     AccountName = e.Result?.AccountName,
-                    AccountType = e.Result?.AccountType
+                    AccountType = e.Result?.AccountType,
+                    SupportedEncryptionTypes = e.Result?.SupportedEncryptionTypes
                 }).ToList(),
                 Warnings = info.Kerberos.Warnings.Count > 0
                     ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
@@ -169,6 +171,26 @@ public static class JsonReporter
                 CertificateThumbprint = r.SecurityInfo?.Certificate?.ThumbprintSha256,
                 IsEncrypted = r.Connected ? r.SecurityInfo?.IsEncrypted : null
             }).ToList();
+        }
+
+        /* Kerberos authentication test */
+        if (info.KerberosAuthTest != null)
+        {
+            output.KerberosAuthTest = new KerberosAuthTestJson
+            {
+                Success = info.KerberosAuthTest.Success,
+                Protocol = info.KerberosAuthTest.Protocol,
+                Spn = info.KerberosAuthTest.Spn,
+                FellBackToNtlm = info.KerberosAuthTest.FellBackToNtlm,
+                Error = info.KerberosAuthTest.Error,
+                KerberosEtype = info.KerberosAuthTest.KerberosEtype,
+                KerberosEtypeName = info.KerberosAuthTest.KerberosEtypeName,
+                UsesRc4 = info.KerberosAuthTest.UsesRc4,
+                ClientSupportedEtypes = info.KerberosAuthTest.ClientSupportedEtypes,
+                ClientEtypeNames = info.KerberosAuthTest.ClientEtypeNames,
+                ServiceAccountEtypes = info.KerberosAuthTest.ServiceAccountEtypes,
+                NegotiableEtypeNames = info.KerberosAuthTest.NegotiableEtypeNames
+            };
         }
 
         return output;
@@ -227,6 +249,7 @@ public static class JsonReporter
         public List<string>? ChainValidation { get; set; }
         public KerberosJson? Kerberos { get; set; }
         public List<SanConnectivityJson>? SanConnectivity { get; set; }
+        public KerberosAuthTestJson? KerberosAuthTest { get; set; }
     }
 
     private sealed class MetaJson
@@ -328,6 +351,7 @@ public static class JsonReporter
         public bool Found { get; set; }
         public string? AccountName { get; set; }
         public string? AccountType { get; set; }
+        public int? SupportedEncryptionTypes { get; set; }
     }
 
     private sealed class SanSpnJson
@@ -349,5 +373,21 @@ public static class JsonReporter
         public string? CertificateSubject { get; set; }
         public string? CertificateThumbprint { get; set; }
         public bool? IsEncrypted { get; set; }
+    }
+
+    private sealed class KerberosAuthTestJson
+    {
+        public bool Success { get; set; }
+        public string? Protocol { get; set; }
+        public string Spn { get; set; } = string.Empty;
+        public bool FellBackToNtlm { get; set; }
+        public string? Error { get; set; }
+        public int? KerberosEtype { get; set; }
+        public string? KerberosEtypeName { get; set; }
+        public bool UsesRc4 { get; set; }
+        public int? ClientSupportedEtypes { get; set; }
+        public List<string>? ClientEtypeNames { get; set; }
+        public int? ServiceAccountEtypes { get; set; }
+        public List<string>? NegotiableEtypeNames { get; set; }
     }
 }

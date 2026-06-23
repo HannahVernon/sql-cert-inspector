@@ -233,9 +233,98 @@ public class KerberosHealthCheckTests
             {
                 Found = found,
                 AccountName = account,
-                AccountType = account != null ? "User" : null
+                AccountType = account != null ? "User" : null,
+                SupportedEncryptionTypes = found ? 0x18 : null
             }
         };
+    }
+
+    private static SpnExpectation MakeSpnWithEtypes(string label, string spn, bool found, string? account, int? etypes)
+    {
+        return new SpnExpectation
+        {
+            Label = label,
+            Spn = spn,
+            Result = new SpnLookupResult
+            {
+                Found = found,
+                AccountName = account,
+                AccountType = account != null ? "User" : null,
+                SupportedEncryptionTypes = etypes
+            }
+        };
+    }
+
+    [Fact]
+    public void Rc4Only_EmitsError()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpnWithEtypes("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql", etypes: 0x4)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Error && w.Message.Contains("only supports RC4-HMAC"));
+    }
+
+    [Fact]
+    public void Rc4WithAes_EmitsWarning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpnWithEtypes("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql", etypes: 0x1C)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("still has RC4-HMAC enabled"));
+    }
+
+    [Fact]
+    public void AesOnly_NoRc4Warning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpnWithEtypes("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql", etypes: 0x18)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Message.Contains("RC4"));
+    }
+
+    [Fact]
+    public void NoEncryptionTypesAttribute_EmitsWarning()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "db.example.com",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpnWithEtypes("FQDN + Port", "MSSQLSvc/db.example.com:1433", found: true, account: "svc-sql", etypes: null)
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, false);
+
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("does not have msDS-SupportedEncryptionTypes configured"));
     }
 
     [Fact]

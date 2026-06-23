@@ -61,7 +61,10 @@
 | `ConnectionSecurityInfo.cs` | Model class holding connection metadata, TLS properties, TDS protocol version, fallback status, the certificate, Kerberos diagnostics, and SAN connectivity test results. |
 | `CertificateAnalyzer.cs` | Extracts all fields from an `X509Certificate2` (subject, issuer, SANs, key info, etc.) and runs health checks (expiry, self-signed, hostname mismatch, weak keys, deprecated algorithms, CN-only certs, missing Server Authentication EKU). Cross-references SANs with DNS/Kerberos data (CNAME target in SANs, reverse DNS in SANs). Accepts an optional resolved FQDN to avoid false hostname mismatch warnings when a short (non-FQDN) name was used. Builds the certificate chain when requested. |
 | `KerberosDiagnostics.cs` | Model class for Kerberos/DNS diagnostic results (SPN lookup results, SAN SPN coverage, DNS resolution, DNS record types, resolved FQDN, warnings, and `setspn` remediation commands). |
-| `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. By default, only checks port/instance-specific SPNs (used by TCP connections); portless base SPNs and SAN SPN coverage are included only with `--full-spn-diagnostics`. Suggests `setspn` remediation commands (FQDN-only) when SPNs are missing. Runs health checks for DNS mismatches, missing SPNs, duplicate SPN registrations, and uncovered SAN hostnames. Windows-only (`[SupportedOSPlatform("windows")]`). |
+| `KerberosInspector.cs` | Uses `DnsResolver` for DNS resolution with record type awareness. Performs reverse lookup, CNAME detection (true CNAME vs DNS suffix expansion), and SPN lookup via LDAP `DirectorySearcher`. Queries `msDS-SupportedEncryptionTypes` on SPN service accounts to detect RC4 Kerberos exposure (CVE-2026-20833). When input is a non-FQDN short name, uses the resolved FQDN for SPN construction. By default, only checks port/instance-specific SPNs (used by TCP connections); portless base SPNs and SAN SPN coverage are included only with `--full-spn-diagnostics`. Suggests `setspn` remediation commands (FQDN-only) when SPNs are missing. Runs health checks for DNS mismatches, missing SPNs, duplicate SPN registrations, and uncovered SAN hostnames. Windows-only (`[SupportedOSPlatform("windows")]`). |
+| `KerberosAuthResult.cs` | Model class for Kerberos authentication test results (protocol, SPN, etype, RC4 flag, NTLM fallback, error). |
+| `KerberosAuthTester.cs` | Performs a live SSPI/Negotiate authentication handshake over TDS LOGIN7 to verify Kerberos vs NTLM and extract the actual encryption type (etype) from the SPNEGO token via ASN.1 DER parsing. Windows-only. |
+| `TdsLogin7Builder.cs` | Builds a minimal TDS LOGIN7 packet with an SSPI token per MS-TDS 2.2.6.4 for the Kerberos authentication test. |
 | `ConsoleReporter.cs` | Renders results as colored plain text. Auto-detects redirected output and suppresses colors. Maps raw algorithm enum values to human-readable names. |
 | `JsonReporter.cs` | Renders results as indented JSON via `System.Text.Json`. Provides `GenerateJson()` for string output (used by `--output` file writing) and `Report()` for direct console output. Applies the same algorithm name mappings as the console reporter. |
 | `OutputFileHelper.cs` | Generates output filenames from `--server` values by replacing illegal filename characters (`\/:*?"<>\|`) with hyphens. |
@@ -217,8 +220,18 @@ KerberosInspector.Inspect(hostname, port, instanceName, isPortExplicit, fullSpnD
   │   └─ Detect suffix expansion vs true CNAME
   ├─ DNS reverse lookup
   ├─ SPN lookup via LDAP (uses resolved FQDN for SPN construction when input is short name)
+  ├─ Query msDS-SupportedEncryptionTypes for RC4 detection (CVE-2026-20833)
   ├─ Health checks (missing SPNs, DNS mismatch, true CNAME warnings, duplicate SPNs)
   └─ Generate setspn remediation commands for missing FQDN-qualified SPNs
+  │
+  ▼
+KerberosAuthTester.TestAsync() [optional, --test-kerberos]
+  │
+  ├─ Open fresh TCP connection, PRELOGIN, TLS handshake
+  ├─ Build LOGIN7 with SSPI token via NegotiateAuthentication
+  ├─ Multi-round SSPI exchange (LOGIN7 + TDS 0xED continuations)
+  ├─ Extract Kerberos etype from SPNEGO token via ASN.1 DER parsing
+  └─ Report protocol (Kerberos/NTLM), etype, RC4 usage
   │
   ▼
 ConsoleReporter.Report() or JsonReporter.Report()

@@ -234,7 +234,7 @@ public static class KerberosInspector
             using var searcher = new DirectorySearcher
             {
                 Filter = $"(servicePrincipalName={EscapeLdapFilter(spn)})",
-                PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName" },
+                PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName", "msDS-SupportedEncryptionTypes" },
                 SearchScope = SearchScope.Subtree,
                 ServerTimeLimit = TimeSpan.FromSeconds(15),
                 ClientTimeout = TimeSpan.FromSeconds(30)
@@ -245,6 +245,13 @@ public static class KerberosInspector
             {
                 result.Found = true;
                 result.AccountName = GetPropertyValue(searchResult, "sAMAccountName");
+
+                /* Parse msDS-SupportedEncryptionTypes bitmask */
+                if (searchResult.Properties.Contains("msDS-SupportedEncryptionTypes") &&
+                    searchResult.Properties["msDS-SupportedEncryptionTypes"].Count > 0)
+                {
+                    result.SupportedEncryptionTypes = (int)searchResult.Properties["msDS-SupportedEncryptionTypes"][0];
+                }
 
                 var objectClasses = searchResult.Properties["objectClass"];
                 if (objectClasses != null)
@@ -430,6 +437,9 @@ public static class KerberosInspector
                 "This may cause unpredictable Kerberos authentication behavior."));
         }
 
+        /* Kerberos encryption type checks (CVE-2026-20833 — RC4 deprecation) */
+        CheckEncryptionTypes(diag, foundSpns);
+
         /* SAN SPN coverage warnings */
         if (diag.SanSpnCoverage != null)
         {
@@ -442,6 +452,73 @@ public static class KerberosInspector
                         $"SAN hostname '{missing.SanHostname}' has no SPN registered ({missing.Spn}). " +
                         "Kerberos authentication will fail for clients connecting via this name."));
                 }
+            }
+        }
+    }
+
+    /* Kerberos encryption type bit flags from msDS-SupportedEncryptionTypes */
+    private const int EncTypeDes = 0x1;
+    private const int EncTypeDesCbc = 0x2;
+    private const int EncTypeRc4 = 0x4;
+    private const int EncTypeAes128 = 0x8;
+    private const int EncTypeAes256 = 0x10;
+
+    /// <summary>
+    /// Checks the msDS-SupportedEncryptionTypes of the SPN service account and
+    /// warns about RC4 usage (CVE-2026-20833) or missing AES support.
+    /// </summary>
+    private static void CheckEncryptionTypes(KerberosDiagnostics diag, List<SpnExpectation> foundSpns)
+    {
+        if (foundSpns.Count == 0) return;
+
+        /* Use the first found SPN — all variants should point to the same account */
+        var firstFound = foundSpns.First();
+        if (firstFound.Result == null) return;
+
+        string account = firstFound.Result.AccountName ?? "unknown";
+        int? etypesRaw = firstFound.Result.SupportedEncryptionTypes;
+
+        if (etypesRaw == null)
+        {
+            /* Attribute not set — DC uses domain defaults which may include RC4 */
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                $"Service account '{account}' does not have msDS-SupportedEncryptionTypes configured. " +
+                "The domain controller will select encryption types based on domain functional level " +
+                "defaults, which may include RC4-HMAC. Per CVE-2026-20833, explicitly set this attribute " +
+                "to AES256 (0x10) or AES128+AES256 (0x18) to ensure RC4 is not used."));
+            return;
+        }
+
+        int etypes = etypesRaw.Value;
+
+        bool hasRc4 = (etypes & EncTypeRc4) != 0;
+        bool hasAes128 = (etypes & EncTypeAes128) != 0;
+        bool hasAes256 = (etypes & EncTypeAes256) != 0;
+        bool hasAes = hasAes128 || hasAes256;
+
+        if (hasRc4 && !hasAes)
+        {
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Error,
+                $"Service account '{account}' only supports RC4-HMAC for Kerberos (msDS-SupportedEncryptionTypes = 0x{etypes:X}). " +
+                "RC4 is deprecated per CVE-2026-20833 and will be disabled in a future Windows update. " +
+                "Enable AES256 (and optionally AES128) on this account immediately."));
+        }
+        else if (hasRc4 && hasAes)
+        {
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                $"Service account '{account}' still has RC4-HMAC enabled alongside AES (msDS-SupportedEncryptionTypes = 0x{etypes:X}). " +
+                "RC4 is deprecated per CVE-2026-20833. Remove RC4 support from the account to prevent downgrade attacks."));
+        }
+
+        if (!hasAes)
+        {
+            /* Only warn about missing AES if we haven't already emitted the RC4-only error above */
+            if (!hasRc4)
+            {
+                diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                    $"Service account '{account}' does not advertise AES support (msDS-SupportedEncryptionTypes = 0x{etypes:X}). " +
+                    "When the attribute is 0 or only contains DES/RC4, the domain controller selects encryption " +
+                    "types based on domain functional level defaults. Explicitly enable AES256 on the account."));
             }
         }
     }

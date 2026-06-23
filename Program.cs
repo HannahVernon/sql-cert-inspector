@@ -65,6 +65,11 @@ var testSanConnectivityOption = new Option<bool>("--test-san-connectivity")
     Description = "Perform a full certificate inspection for each DNS name in the certificate's SANs"
 };
 
+var testKerberosOption = new Option<bool>("--test-kerberos")
+{
+    Description = "Perform an actual Kerberos authentication test to verify SPN, detect NTLM fallback, and check for RC4 etype (Windows only)"
+};
+
 var rootCommand = new RootCommand(
     "sql-cert-inspector — Inspect the TLS certificate used by a SQL Server instance.");
 
@@ -81,6 +86,7 @@ rootCommand.Options.Add(chainOption);
 rootCommand.Options.Add(skipDnsOption);
 rootCommand.Options.Add(skipKerberosOption);
 rootCommand.Options.Add(testSanConnectivityOption);
+rootCommand.Options.Add(testKerberosOption);
 rootCommand.Options.Add(timeoutOption);
 
 rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -98,6 +104,7 @@ rootCommand.SetAction(async (parseResult, cancellationToken) =>
         SkipDns = parseResult.GetValue(skipDnsOption),
         FullSpnDiagnostics = parseResult.GetValue(fullSpnDiagnosticsOption),
         TestSanConnectivity = parseResult.GetValue(testSanConnectivityOption),
+        TestKerberos = parseResult.GetValue(testKerberosOption),
         OutputFileSpecified = outputSpecified,
         OutputFile = outputSpecified ? parseResult.GetValue(outputOption) : null,
         EncryptStrict = parseResult.GetValue(encryptStrictOption)
@@ -270,6 +277,50 @@ static async Task<int> RunAsync(CommandLineOptions options)
         await RunSanConnectivityTests(options, securityInfo, endpoint.Host, port);
     }
 
+    /* Kerberos authentication test (--test-kerberos) */
+    if (options.TestKerberos && securityInfo.IsEncrypted && OperatingSystem.IsWindows())
+    {
+        WriteInfo(options, "Running Kerberos authentication test...");
+        try
+        {
+#pragma warning disable CA1416 // Guarded by OperatingSystem.IsWindows() above
+            securityInfo.KerberosAuthTest = await RunKerberosAuthTest(
+                endpoint.Host, port, endpoint.InstanceName,
+                options.Timeout, options.EncryptStrict);
+
+            /* Cross-reference client and service account encryption types
+               (only meaningful when Kerberos was actually used) */
+            var authResult = securityInfo.KerberosAuthTest;
+            if (!authResult.FellBackToNtlm)
+            {
+                authResult.ClientSupportedEtypes = KerberosAuthResult.ReadClientSupportedEtypes();
+                authResult.ClientEtypeNames = KerberosAuthResult.BitmaskToNames(
+                    authResult.ClientSupportedEtypes ?? 0x1C);
+
+                /* Pull service account etypes from the Kerberos diagnostics if available */
+                var serviceEtypes = securityInfo.Kerberos?.ExpectedSpns
+                    .FirstOrDefault(s => s.Result?.Found == true)?.Result?.SupportedEncryptionTypes;
+                authResult.ServiceAccountEtypes = serviceEtypes;
+
+                int intersection = KerberosAuthResult.ComputeIntersection(
+                    authResult.ClientSupportedEtypes, serviceEtypes);
+                authResult.NegotiableEtypeNames = KerberosAuthResult.BitmaskToNames(intersection);
+            }
+#pragma warning restore CA1416
+        }
+        catch (Exception ex)
+        {
+            securityInfo.KerberosAuthTest = new KerberosAuthResult
+            {
+                Success = false,
+                Error = ex.Message,
+                Spn = endpoint.InstanceName != null
+                    ? $"MSSQLSvc/{endpoint.Host}:{endpoint.InstanceName}"
+                    : $"MSSQLSvc/{endpoint.Host}:{port}"
+            };
+        }
+    }
+
     /* Report */
     if (!options.Json && !options.OutputFileSpecified)
     {
@@ -429,5 +480,151 @@ static async Task RunSanConnectivityTests(
 
         primaryInfo.SanConnectivityResults.Add(result);
     }
+}
+
+/// <summary>
+/// Opens a fresh connection to the SQL Server, performs PRELOGIN + TLS,
+/// then sends a LOGIN7 with SSPI to test Kerberos authentication.
+/// </summary>
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
+static async Task<KerberosAuthResult> RunKerberosAuthTest(
+    string host, int port, string? instanceName,
+    int timeoutSeconds, bool encryptStrict)
+{
+    using var tcpClient = new System.Net.Sockets.TcpClient();
+    var addresses = await System.Net.Dns.GetHostAddressesAsync(host);
+    if (addresses.Length == 0)
+        throw new ConnectionException($"DNS resolution for '{host}' returned no addresses.");
+
+    using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+    await tcpClient.ConnectAsync(addresses[0], port, connectCts.Token);
+
+    var networkStream = tcpClient.GetStream();
+    networkStream.ReadTimeout = timeoutSeconds * 1000;
+    networkStream.WriteTimeout = timeoutSeconds * 1000;
+
+    Stream authStream;
+
+    if (encryptStrict)
+    {
+        /* TDS 8.0: TLS directly on TCP */
+        var sslStream = new System.Net.Security.SslStream(
+            networkStream, leaveInnerStreamOpen: true,
+            userCertificateValidationCallback: (_, _, _, _) => true);
+
+        var sslOptions = new System.Net.Security.SslClientAuthenticationOptions
+        {
+            TargetHost = host,
+            EnabledSslProtocols = System.Security.Authentication.SslProtocols.None,
+            CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck,
+            ApplicationProtocols = [new System.Net.Security.SslApplicationProtocol("tds/8.0")]
+        };
+
+        await sslStream.AuthenticateAsClientAsync(sslOptions, connectCts.Token);
+
+        /* Send PRELOGIN inside TLS tunnel (required for TDS 8.0 before LOGIN7) */
+        byte[] prePayload = BuildPreloginForAuth();
+        byte[] prePacket = TdsPacket.Build(TdsPacket.TypePreLogin, TdsPacket.StatusEom, prePayload);
+        await sslStream.WriteAsync(prePacket, connectCts.Token);
+        await sslStream.FlushAsync(connectCts.Token);
+
+        try
+        {
+            await TdsPacket.ReadAsync(sslStream, connectCts.Token);
+        }
+        catch { /* best-effort */ }
+
+        authStream = sslStream;
+    }
+    else
+    {
+        /* TDS 7.x: PRELOGIN cleartext, then TLS wrapped in TDS packets */
+        byte[] prePayload = BuildPreloginForAuth();
+        byte[] prePacket = TdsPacket.Build(TdsPacket.TypePreLogin, TdsPacket.StatusEom, prePayload);
+        await networkStream.WriteAsync(prePacket, connectCts.Token);
+        await networkStream.FlushAsync(connectCts.Token);
+
+        var (type, _, _) = await TdsPacket.ReadAsync(networkStream, connectCts.Token);
+        if (type != TdsPacket.TypeTabularResult)
+        {
+            throw new ConnectionException(
+                $"Expected PRELOGIN response (type 0x04), received 0x{type:X2}.");
+        }
+
+        /* TLS handshake wrapped in TDS packets */
+        var tdsStream = new TdsPreloginStream(networkStream);
+        var sslStream = new System.Net.Security.SslStream(
+            tdsStream, leaveInnerStreamOpen: true,
+            userCertificateValidationCallback: (_, _, _, _) => true);
+
+        var sslOptions = new System.Net.Security.SslClientAuthenticationOptions
+        {
+            TargetHost = host,
+            EnabledSslProtocols = System.Security.Authentication.SslProtocols.None,
+            CertificateRevocationCheckMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck
+        };
+
+        await sslStream.AuthenticateAsClientAsync(sslOptions, connectCts.Token);
+
+        /* After TLS handshake, SQL Server expects raw TLS records on the wire
+           (no more PRELOGIN packet wrapping). Switch to passthrough mode so
+           SslStream writes directly to the underlying network stream. */
+        tdsStream.Passthrough = true;
+
+        /* After TLS handshake, SQL Server expects TDS packets directly on the
+           SslStream (no more TdsPreloginStream wrapping for LOGIN7) */
+        authStream = sslStream;
+    }
+
+#pragma warning disable CA1416 // Method is annotated with [SupportedOSPlatform("windows")]
+    return await KerberosAuthTester.TestAsync(
+        authStream, host, port, instanceName, timeoutSeconds);
+#pragma warning restore CA1416
+}
+
+/// <summary>
+/// Builds a minimal PRELOGIN payload for the auth test connection.
+/// </summary>
+static byte[] BuildPreloginForAuth()
+{
+    /* Version + Encryption + Terminator */
+    int optionSize = 2 * 5 + 1; /* 2 options x 5 bytes each + terminator */
+    int versionDataLen = 6;
+    int encryptDataLen = 1;
+    int dataOffset = optionSize;
+
+    byte[] payload = new byte[optionSize + versionDataLen + encryptDataLen];
+    int pos = 0;
+
+    /* Version option */
+    payload[pos++] = 0x00; /* TOKEN_VERSION */
+    payload[pos++] = (byte)(dataOffset >> 8);
+    payload[pos++] = (byte)(dataOffset & 0xFF);
+    payload[pos++] = (byte)(versionDataLen >> 8);
+    payload[pos++] = (byte)(versionDataLen & 0xFF);
+
+    /* Encryption option */
+    int encOffset = dataOffset + versionDataLen;
+    payload[pos++] = 0x01; /* TOKEN_ENCRYPTION */
+    payload[pos++] = (byte)(encOffset >> 8);
+    payload[pos++] = (byte)(encOffset & 0xFF);
+    payload[pos++] = (byte)(encryptDataLen >> 8);
+    payload[pos++] = (byte)(encryptDataLen & 0xFF);
+
+    /* Terminator */
+    payload[pos++] = 0xFF;
+
+    /* Version data: 0.0.0.0 build 0 */
+    payload[dataOffset] = 0;
+    payload[dataOffset + 1] = 0;
+    payload[dataOffset + 2] = 0;
+    payload[dataOffset + 3] = 0;
+    payload[dataOffset + 4] = 0;
+    payload[dataOffset + 5] = 0;
+
+    /* Encryption: ON (0x01) */
+    payload[encOffset] = 0x01;
+
+    return payload;
 }
 

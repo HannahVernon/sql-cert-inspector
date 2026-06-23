@@ -11,6 +11,7 @@ A command-line tool that inspects the TLS certificate and Kerberos configuration
 - **SAN cross-reference** — validates CNAME targets and reverse DNS hostnames appear in the certificate's SANs; optionally performs SPN lookups for each SAN hostname (`--full-spn-diagnostics`) and full certificate inspection for each SAN (`--test-san-connectivity`)
 - **Full certificate chain** — optionally display intermediate and root CA certificates
 - **Kerberos diagnostics** — SPN registration lookup via LDAP, DNS forward/reverse validation, CNAME detection (via P/Invoke to `DnsQuery_W` for actual DNS record types), SPN account owner identification, and `setspn` remediation commands when SPNs are missing
+- **RC4 Kerberos detection** — queries `msDS-SupportedEncryptionTypes` on SPN service accounts to detect RC4 exposure (CVE-2026-20833); optional `--test-kerberos` flag performs a live SSPI/Negotiate authentication handshake to verify Kerberos vs NTLM and detect the actual encryption type (etype) on the wire
 - **Smart hostname handling** — short (non-FQDN) hostnames are automatically resolved to their FQDN for certificate matching and SPN construction, with DNS suffix identification and ambiguity detection when multiple suffixes could resolve the same short name to different servers
 - **TDS 8.0 (Strict) support** — connect to servers using strict encryption (`--encrypt-strict` / `--tds8`) where TLS negotiation precedes all TDS traffic; auto-fallback between TDS 7.x and 8.0 with user guidance
 - **Named instance support** — resolves ports via SQL Server Browser service (UDP 1434)
@@ -51,6 +52,7 @@ sql-cert-inspector --server <server> [options]
 | `--skip-dns` | | Skip DNS diagnostics (Kerberos SPN lookups still run using raw hostname) |
 | `--full-spn-diagnostics` | | Check all SPN variants including portless base SPNs and SPN coverage for each certificate SAN hostname |
 | `--test-san-connectivity` | | Perform a full certificate inspection for each DNS name in the certificate's SANs |
+| `--test-kerberos` | | Perform a live Kerberos SSPI authentication test against the server to verify Kerberos vs NTLM and detect RC4 etype on the wire (Windows only) |
 | `--encrypt-strict` | `--tds8` | Use TDS 8.0 strict encryption (TLS before PRELOGIN) |
 | `--no-color` | | Disable colored console output |
 | `--help` | | Show help |
@@ -103,6 +105,9 @@ sql-cert-inspector --server myserver --test-san-connectivity
 
 # Full SPN diagnostics with SAN coverage
 sql-cert-inspector --server myserver --full-spn-diagnostics
+
+# Live Kerberos authentication test (Windows only)
+sql-cert-inspector --server myserver --test-kerberos
 ```
 
 ### Sample output
