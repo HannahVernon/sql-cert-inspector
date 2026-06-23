@@ -332,8 +332,10 @@ public static class KerberosAuthTester
                 if (result != null) return result;
             }
 
-            /* Constructed tags — recurse */
-            if ((tag & 0x20) != 0)
+            /* Constructed tags or OCTET STRING (0x04) — recurse.
+               The Kerberos AP-REQ is wrapped in an OCTET STRING inside
+               the SPNEGO NegTokenInit mechToken field. */
+            if ((tag & 0x20) != 0 || tag == 0x04)
             {
                 var result = FindEtypeInToken(data, contentStart, contentEnd);
                 if (result != null) return result;
