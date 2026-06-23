@@ -372,7 +372,7 @@ public static class ConsoleReporter
 
     private static void WriteFieldColored(string label, string spn, string status, ConsoleColor statusColor)
     {
-        string paddedLabel = $"  {label,-20}";
+        string paddedLabel = $"  {label,-25}";
         if (_colorsEnabled)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
