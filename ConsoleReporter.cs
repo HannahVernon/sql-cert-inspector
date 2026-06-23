@@ -590,7 +590,7 @@ public static class ConsoleReporter
         Console.WriteLine();
         WriteField("Advisory", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-20833");
         WriteField("", "https://nvd.nist.gov/vuln/detail/CVE-2026-20833");
-        WriteField("Mitigation", "https://support.microsoft.com/en-us/topic/kb5021131");
+        WriteField("Mitigation", "https://support.microsoft.com/en-us/topic/kb5021131-how-to-manage-the-kerberos-protocol-changes-related-to-cve-2022-37966-fd837ac3-cdec-4e76-a6ec-86e67501407d");
     }
 
     private static void ReportKerberosAuthTest(KerberosAuthResult authResult)
