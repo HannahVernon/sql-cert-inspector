@@ -283,9 +283,11 @@ static async Task<int> RunAsync(CommandLineOptions options)
         WriteInfo(options, "Running Kerberos authentication test...");
         try
         {
+#pragma warning disable CA1416 // Guarded by OperatingSystem.IsWindows() above
             securityInfo.KerberosAuthTest = await RunKerberosAuthTest(
                 endpoint.Host, port, endpoint.InstanceName,
                 options.Timeout, options.EncryptStrict);
+#pragma warning restore CA1416
         }
         catch (Exception ex)
         {
@@ -545,13 +547,20 @@ static async Task<KerberosAuthResult> RunKerberosAuthTest(
 
         await sslStream.AuthenticateAsClientAsync(sslOptions, connectCts.Token);
 
+        /* After TLS handshake, SQL Server expects raw TLS records on the wire
+           (no more PRELOGIN packet wrapping). Switch to passthrough mode so
+           SslStream writes directly to the underlying network stream. */
+        tdsStream.Passthrough = true;
+
         /* After TLS handshake, SQL Server expects TDS packets directly on the
            SslStream (no more TdsPreloginStream wrapping for LOGIN7) */
         authStream = sslStream;
     }
 
+#pragma warning disable CA1416 // Method is annotated with [SupportedOSPlatform("windows")]
     return await KerberosAuthTester.TestAsync(
         authStream, host, port, instanceName, timeoutSeconds);
+#pragma warning restore CA1416
 }
 
 /// <summary>
