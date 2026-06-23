@@ -469,15 +469,27 @@ public static class KerberosInspector
     /// </summary>
     private static void CheckEncryptionTypes(KerberosDiagnostics diag, List<SpnExpectation> foundSpns)
     {
-        /* Use the first found SPN's encryption types — all variants should point
-           to the same account, so they'll share the same attribute value. */
-        var firstWithEtypes = foundSpns
-            .FirstOrDefault(s => s.Result?.SupportedEncryptionTypes != null);
+        if (foundSpns.Count == 0) return;
 
-        if (firstWithEtypes?.Result == null) return;
+        /* Use the first found SPN — all variants should point to the same account */
+        var firstFound = foundSpns.First();
+        if (firstFound.Result == null) return;
 
-        int etypes = firstWithEtypes.Result.SupportedEncryptionTypes!.Value;
-        string account = firstWithEtypes.Result.AccountName ?? "unknown";
+        string account = firstFound.Result.AccountName ?? "unknown";
+        int? etypesRaw = firstFound.Result.SupportedEncryptionTypes;
+
+        if (etypesRaw == null)
+        {
+            /* Attribute not set — DC uses domain defaults which may include RC4 */
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning,
+                $"Service account '{account}' does not have msDS-SupportedEncryptionTypes configured. " +
+                "The domain controller will select encryption types based on domain functional level " +
+                "defaults, which may include RC4-HMAC. Per CVE-2026-20833, explicitly set this attribute " +
+                "to AES256 (0x10) or AES128+AES256 (0x18) to ensure RC4 is not used."));
+            return;
+        }
+
+        int etypes = etypesRaw.Value;
 
         bool hasRc4 = (etypes & EncTypeRc4) != 0;
         bool hasAes128 = (etypes & EncTypeAes128) != 0;

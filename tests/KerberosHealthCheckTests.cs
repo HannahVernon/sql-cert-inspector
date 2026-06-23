@@ -233,7 +233,8 @@ public class KerberosHealthCheckTests
             {
                 Found = found,
                 AccountName = account,
-                AccountType = account != null ? "User" : null
+                AccountType = account != null ? "User" : null,
+                SupportedEncryptionTypes = found ? 0x18 : null
             }
         };
     }
@@ -309,7 +310,7 @@ public class KerberosHealthCheckTests
     }
 
     [Fact]
-    public void NoEncryptionTypesAttribute_NoWarning()
+    public void NoEncryptionTypesAttribute_EmitsWarning()
     {
         var diag = new KerberosDiagnostics
         {
@@ -322,8 +323,8 @@ public class KerberosHealthCheckTests
 
         KerberosInspector.RunHealthChecks(diag, 1433, false);
 
-        Assert.DoesNotContain(diag.Warnings, w =>
-            w.Message.Contains("RC4") || w.Message.Contains("AES"));
+        Assert.Contains(diag.Warnings, w =>
+            w.Severity == WarningSeverity.Warning && w.Message.Contains("does not have msDS-SupportedEncryptionTypes configured"));
     }
 
     [Fact]
