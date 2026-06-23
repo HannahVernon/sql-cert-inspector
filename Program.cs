@@ -288,20 +288,24 @@ static async Task<int> RunAsync(CommandLineOptions options)
                 endpoint.Host, port, endpoint.InstanceName,
                 options.Timeout, options.EncryptStrict);
 
-            /* Cross-reference client and service account encryption types */
+            /* Cross-reference client and service account encryption types
+               (only meaningful when Kerberos was actually used) */
             var authResult = securityInfo.KerberosAuthTest;
-            authResult.ClientSupportedEtypes = KerberosAuthResult.ReadClientSupportedEtypes();
-            authResult.ClientEtypeNames = KerberosAuthResult.BitmaskToNames(
-                authResult.ClientSupportedEtypes ?? 0x1C);
+            if (!authResult.FellBackToNtlm)
+            {
+                authResult.ClientSupportedEtypes = KerberosAuthResult.ReadClientSupportedEtypes();
+                authResult.ClientEtypeNames = KerberosAuthResult.BitmaskToNames(
+                    authResult.ClientSupportedEtypes ?? 0x1C);
 
-            /* Pull service account etypes from the Kerberos diagnostics if available */
-            var serviceEtypes = securityInfo.Kerberos?.ExpectedSpns
-                .FirstOrDefault(s => s.Result?.Found == true)?.Result?.SupportedEncryptionTypes;
-            authResult.ServiceAccountEtypes = serviceEtypes;
+                /* Pull service account etypes from the Kerberos diagnostics if available */
+                var serviceEtypes = securityInfo.Kerberos?.ExpectedSpns
+                    .FirstOrDefault(s => s.Result?.Found == true)?.Result?.SupportedEncryptionTypes;
+                authResult.ServiceAccountEtypes = serviceEtypes;
 
-            int intersection = KerberosAuthResult.ComputeIntersection(
-                authResult.ClientSupportedEtypes, serviceEtypes);
-            authResult.NegotiableEtypeNames = KerberosAuthResult.BitmaskToNames(intersection);
+                int intersection = KerberosAuthResult.ComputeIntersection(
+                    authResult.ClientSupportedEtypes, serviceEtypes);
+                authResult.NegotiableEtypeNames = KerberosAuthResult.BitmaskToNames(intersection);
+            }
 #pragma warning restore CA1416
         }
         catch (Exception ex)

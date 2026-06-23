@@ -136,6 +136,20 @@ public static class ConsoleReporter
             Console.WriteLine();
             ReportKerberosAuthTest(info.KerberosAuthTest);
         }
+
+        /* Show RC4 advisory links if any RC4 risk was detected */
+        bool rc4Risk = false;
+        if (info.Kerberos?.Warnings.Any(w => w.Message.Contains("RC4")) == true)
+            rc4Risk = true;
+        if (info.KerberosAuthTest is { UsesRc4: true })
+            rc4Risk = true;
+        if (info.KerberosAuthTest?.NegotiableEtypeNames?.Contains("RC4-HMAC") == true)
+            rc4Risk = true;
+
+        if (rc4Risk)
+        {
+            WriteRc4AdvisoryLinks();
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -569,6 +583,14 @@ public static class ConsoleReporter
         {
             Console.Write(text);
         }
+    }
+
+    private static void WriteRc4AdvisoryLinks()
+    {
+        Console.WriteLine();
+        WriteField("Advisory", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-20833");
+        WriteField("", "https://nvd.nist.gov/vuln/detail/CVE-2026-20833");
+        WriteField("Mitigation", "https://support.microsoft.com/en-us/topic/kb5021131");
     }
 
     private static void ReportKerberosAuthTest(KerberosAuthResult authResult)
