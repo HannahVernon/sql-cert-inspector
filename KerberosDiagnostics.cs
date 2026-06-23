@@ -65,6 +65,13 @@ public sealed class SpnLookupResult
     public bool Found { get; set; }
     public string? AccountName { get; set; }
     public string? AccountType { get; set; }
+
+    /// <summary>
+    /// The raw value of the msDS-SupportedEncryptionTypes AD attribute for
+    /// the account that owns the SPN. Null if the attribute was not present
+    /// or the lookup did not find the SPN.
+    /// </summary>
+    public int? SupportedEncryptionTypes { get; set; }
 }
 
 public sealed class KerberosWarning

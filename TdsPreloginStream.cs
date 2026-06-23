@@ -15,10 +15,32 @@ public sealed class TdsPreloginStream : Stream
     private byte[] _readBuffer = Array.Empty<byte>();
     private int _readOffset;
     private int _readCount;
+    private bool _passthrough;
 
     public TdsPreloginStream(Stream innerStream)
     {
         _innerStream = innerStream ?? throw new ArgumentNullException(nameof(innerStream));
+    }
+
+    /// <summary>
+    /// Enables passthrough mode. After the TLS handshake completes, SQL Server
+    /// expects raw TLS records on the wire (no TDS PRELOGIN wrapping). Setting
+    /// this to true causes reads and writes to pass directly to the inner stream.
+    /// </summary>
+    public bool Passthrough
+    {
+        get => _passthrough;
+        set
+        {
+            _passthrough = value;
+            if (value)
+            {
+                /* Discard any buffered PRELOGIN-framed data */
+                _readBuffer = Array.Empty<byte>();
+                _readOffset = 0;
+                _readCount = 0;
+            }
+        }
     }
 
     public override bool CanRead => true;
@@ -33,11 +55,16 @@ public sealed class TdsPreloginStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
+        if (_passthrough)
+            return _innerStream.Read(buffer, offset, count);
         return ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
     {
+        if (_passthrough)
+            return await _innerStream.ReadAsync(buffer, offset, count, ct);
+
         if (_readCount > 0)
         {
             int toCopy = Math.Min(count, _readCount);
@@ -70,11 +97,22 @@ public sealed class TdsPreloginStream : Stream
 
     public override void Write(byte[] buffer, int offset, int count)
     {
+        if (_passthrough)
+        {
+            _innerStream.Write(buffer, offset, count);
+            return;
+        }
         WriteAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct)
     {
+        if (_passthrough)
+        {
+            await _innerStream.WriteAsync(buffer, offset, count, ct);
+            return;
+        }
+
         /* Wrap the TLS record data in a TDS PRELOGIN packet */
         byte[] payload = new byte[count];
         Buffer.BlockCopy(buffer, offset, payload, 0, count);

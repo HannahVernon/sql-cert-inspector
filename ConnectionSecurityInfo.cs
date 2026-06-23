@@ -68,6 +68,11 @@ public sealed class ConnectionSecurityInfo
     /// Results of SAN connectivity tests. Null if --test-san-connectivity was not specified.
     /// </summary>
     public List<SanConnectivityResult>? SanConnectivityResults { get; set; }
+
+    /// <summary>
+    /// Results of Kerberos authentication test. Null if --test-kerberos was not specified.
+    /// </summary>
+    public KerberosAuthResult? KerberosAuthTest { get; set; }
 }
 
 /// <summary>

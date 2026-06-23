@@ -129,6 +129,27 @@ public static class ConsoleReporter
             Console.WriteLine();
             ReportSanConnectivity(info.SanConnectivityResults);
         }
+
+        /* Kerberos authentication test */
+        if (info.KerberosAuthTest != null)
+        {
+            Console.WriteLine();
+            ReportKerberosAuthTest(info.KerberosAuthTest);
+        }
+
+        /* Show RC4 advisory links if any RC4 risk was detected */
+        bool rc4Risk = false;
+        if (info.Kerberos?.Warnings.Any(w => w.Message.Contains("RC4")) == true)
+            rc4Risk = true;
+        if (info.KerberosAuthTest is { UsesRc4: true })
+            rc4Risk = true;
+        if (info.KerberosAuthTest?.NegotiableEtypeNames?.Contains("RC4-HMAC") == true)
+            rc4Risk = true;
+
+        if (rc4Risk)
+        {
+            WriteRc4AdvisoryLinks();
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -250,6 +271,39 @@ public static class ConsoleReporter
                 WriteFieldColored(expected.Label, expected.Spn, status, color);
             }
 
+            /* Kerberos encryption types (CVE-2026-20833) */
+            var firstFoundSpn = kerberos.ExpectedSpns
+                .FirstOrDefault(s => s.Result?.Found == true);
+            if (firstFoundSpn?.Result != null)
+            {
+                Console.WriteLine();
+                int? etypes = firstFoundSpn.Result.SupportedEncryptionTypes;
+                if (etypes == null)
+                {
+                    WriteFieldColored("Encryption Types",
+                        "(msDS-SupportedEncryptionTypes not configured)",
+                        "REVIEW — may default to RC4 (CVE-2026-20833)",
+                        ConsoleColor.Yellow);
+                }
+                else
+                {
+                    var enabledTypes = new List<string>();
+                    if ((etypes.Value & 0x1) != 0) enabledTypes.Add("DES-CBC-CRC");
+                    if ((etypes.Value & 0x2) != 0) enabledTypes.Add("DES-CBC-MD5");
+                    if ((etypes.Value & 0x4) != 0) enabledTypes.Add("RC4-HMAC");
+                    if ((etypes.Value & 0x8) != 0) enabledTypes.Add("AES128");
+                    if ((etypes.Value & 0x10) != 0) enabledTypes.Add("AES256");
+                    if (enabledTypes.Count == 0) enabledTypes.Add("(none/default)");
+
+                    bool hasRc4 = (etypes.Value & 0x4) != 0;
+                    ConsoleColor etypeColor = hasRc4 ? ConsoleColor.Yellow : ConsoleColor.Green;
+                    WriteFieldColored("Encryption Types",
+                        $"0x{etypes.Value:X} ({string.Join(", ", enabledTypes)})",
+                        hasRc4 ? "RC4 ENABLED — deprecated per CVE-2026-20833" : "OK",
+                        etypeColor);
+                }
+            }
+
             /* SAN SPN coverage (--full-spn-diagnostics) */
             if (kerberos.SanSpnCoverage is { Count: > 0 })
             {
@@ -332,7 +386,7 @@ public static class ConsoleReporter
 
     private static void WriteFieldColored(string label, string spn, string status, ConsoleColor statusColor)
     {
-        string paddedLabel = $"  {label,-20}";
+        string paddedLabel = $"  {label,-25}";
         if (_colorsEnabled)
         {
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -528,6 +582,102 @@ public static class ConsoleReporter
         else
         {
             Console.Write(text);
+        }
+    }
+
+    private static void WriteRc4AdvisoryLinks()
+    {
+        Console.WriteLine();
+        WriteField("Advisory", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-20833");
+        WriteField("", "https://nvd.nist.gov/vuln/detail/CVE-2026-20833");
+        WriteField("Mitigation", "https://support.microsoft.com/en-us/topic/kb5021131");
+    }
+
+    private static void ReportKerberosAuthTest(KerberosAuthResult authResult)
+    {
+        WriteHeader("Kerberos Authentication Test");
+        WriteField("Target SPN", authResult.Spn);
+
+        if (!authResult.Success)
+        {
+            WriteFieldColored("Result", "FAILED", authResult.Error ?? "Unknown error", ConsoleColor.Red);
+            return;
+        }
+
+        WriteField("Protocol", authResult.Protocol ?? "Unknown");
+
+        if (authResult.FellBackToNtlm)
+        {
+            WriteFieldColored("Result", "NTLM FALLBACK",
+                "Kerberos was not used — check SPN registration and client TGT",
+                ConsoleColor.Yellow);
+        }
+        else
+        {
+            if (authResult.KerberosEtype != null)
+            {
+                string etypeName = authResult.KerberosEtypeName ?? $"Unknown ({authResult.KerberosEtype})";
+                WriteField("Ticket Etype", $"{authResult.KerberosEtype} ({etypeName})");
+
+                if (authResult.UsesRc4)
+                {
+                    WriteFieldColored("RC4 Status", "IN USE",
+                        "RC4-HMAC (etype 23) - deprecated per CVE-2026-20833",
+                        ConsoleColor.Red);
+                }
+                else
+                {
+                    WriteFieldColored("RC4 Status", "Not in use", "OK", ConsoleColor.Green);
+                }
+            }
+
+            /* Etype cross-reference: client vs service account */
+            if (authResult.ClientEtypeNames is { Count: > 0 })
+            {
+                string clientLabel = authResult.ClientSupportedEtypes != null
+                    ? $"0x{authResult.ClientSupportedEtypes:X2}"
+                    : "default (0x1C)";
+                WriteField("Client Etypes",
+                    $"{string.Join(", ", authResult.ClientEtypeNames)} [{clientLabel}]");
+            }
+
+            if (authResult.ServiceAccountEtypes != null)
+            {
+                var svcNames = KerberosAuthResult.BitmaskToNames(authResult.ServiceAccountEtypes.Value);
+                WriteField("Service Acct Etypes",
+                    $"{string.Join(", ", svcNames)} [0x{authResult.ServiceAccountEtypes:X2}]");
+            }
+            else
+            {
+                WriteField("Service Acct Etypes", "(not configured in AD)");
+            }
+
+            if (authResult.NegotiableEtypeNames is { Count: > 0 })
+            {
+                bool intersectionHasRc4 = authResult.NegotiableEtypeNames.Contains("RC4-HMAC");
+                if (intersectionHasRc4)
+                {
+                    WriteFieldColored("Negotiable Etypes",
+                        string.Join(", ", authResult.NegotiableEtypeNames),
+                        "RC4-HMAC is negotiable - remove from client or service account",
+                        ConsoleColor.Yellow);
+                }
+                else
+                {
+                    WriteFieldColored("Negotiable Etypes",
+                        string.Join(", ", authResult.NegotiableEtypeNames), "OK",
+                        ConsoleColor.Green);
+                }
+            }
+            else if (authResult.NegotiableEtypeNames is { Count: 0 })
+            {
+                WriteFieldColored("Negotiable Etypes", "NONE",
+                    "No common encryption types between client and service account",
+                    ConsoleColor.Red);
+            }
+
+            WriteColored("[PASS] Kerberos authentication succeeded.", ConsoleColor.Green);
+            Console.WriteLine();
         }
     }
 }

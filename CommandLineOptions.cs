@@ -15,6 +15,7 @@ public sealed class CommandLineOptions
     public bool SkipDns { get; set; }
     public bool FullSpnDiagnostics { get; set; }
     public bool TestSanConnectivity { get; set; }
+    public bool TestKerberos { get; set; }
 
     /// <summary>
     /// When true, the --output option was specified on the command line.
