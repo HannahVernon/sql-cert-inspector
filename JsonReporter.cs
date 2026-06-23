@@ -185,7 +185,11 @@ public static class JsonReporter
                 Error = info.KerberosAuthTest.Error,
                 KerberosEtype = info.KerberosAuthTest.KerberosEtype,
                 KerberosEtypeName = info.KerberosAuthTest.KerberosEtypeName,
-                UsesRc4 = info.KerberosAuthTest.UsesRc4
+                UsesRc4 = info.KerberosAuthTest.UsesRc4,
+                ClientSupportedEtypes = info.KerberosAuthTest.ClientSupportedEtypes,
+                ClientEtypeNames = info.KerberosAuthTest.ClientEtypeNames,
+                ServiceAccountEtypes = info.KerberosAuthTest.ServiceAccountEtypes,
+                NegotiableEtypeNames = info.KerberosAuthTest.NegotiableEtypeNames
             };
         }
 
@@ -381,5 +385,9 @@ public static class JsonReporter
         public int? KerberosEtype { get; set; }
         public string? KerberosEtypeName { get; set; }
         public bool UsesRc4 { get; set; }
+        public int? ClientSupportedEtypes { get; set; }
+        public List<string>? ClientEtypeNames { get; set; }
+        public int? ServiceAccountEtypes { get; set; }
+        public List<string>? NegotiableEtypeNames { get; set; }
     }
 }

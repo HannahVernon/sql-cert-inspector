@@ -600,13 +600,58 @@ public static class ConsoleReporter
                 if (authResult.UsesRc4)
                 {
                     WriteFieldColored("RC4 Status", "IN USE",
-                        "RC4-HMAC (etype 23) — deprecated per CVE-2026-20833",
+                        "RC4-HMAC (etype 23) - deprecated per CVE-2026-20833",
                         ConsoleColor.Red);
                 }
                 else
                 {
                     WriteFieldColored("RC4 Status", "Not in use", "OK", ConsoleColor.Green);
                 }
+            }
+
+            /* Etype cross-reference: client vs service account */
+            if (authResult.ClientEtypeNames is { Count: > 0 })
+            {
+                string clientLabel = authResult.ClientSupportedEtypes != null
+                    ? $"0x{authResult.ClientSupportedEtypes:X2}"
+                    : "default (0x1C)";
+                WriteField("Client Etypes",
+                    $"{string.Join(", ", authResult.ClientEtypeNames)} [{clientLabel}]");
+            }
+
+            if (authResult.ServiceAccountEtypes != null)
+            {
+                var svcNames = KerberosAuthResult.BitmaskToNames(authResult.ServiceAccountEtypes.Value);
+                WriteField("Service Acct Etypes",
+                    $"{string.Join(", ", svcNames)} [0x{authResult.ServiceAccountEtypes:X2}]");
+            }
+            else
+            {
+                WriteField("Service Acct Etypes", "(not configured in AD)");
+            }
+
+            if (authResult.NegotiableEtypeNames is { Count: > 0 })
+            {
+                bool intersectionHasRc4 = authResult.NegotiableEtypeNames.Contains("RC4-HMAC");
+                if (intersectionHasRc4)
+                {
+                    WriteFieldColored("Negotiable Etypes",
+                        string.Join(", ", authResult.NegotiableEtypeNames),
+                        "RC4-HMAC is negotiable - remove from client or service account",
+                        ConsoleColor.Yellow);
+                }
+                else
+                {
+                    WriteFieldColored("Negotiable Etypes",
+                        string.Join(", ", authResult.NegotiableEtypeNames), "OK",
+                        ConsoleColor.Green);
+                }
+            }
+            else if (authResult.NegotiableEtypeNames is { Count: 0 })
+            {
+                WriteFieldColored("Negotiable Etypes", "NONE",
+                    "No common encryption types between client and service account",
+                    ConsoleColor.Red);
             }
 
             WriteColored("[PASS] Kerberos authentication succeeded.", ConsoleColor.Green);
