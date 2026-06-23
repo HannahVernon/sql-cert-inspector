@@ -129,6 +129,13 @@ public static class ConsoleReporter
             Console.WriteLine();
             ReportSanConnectivity(info.SanConnectivityResults);
         }
+
+        /* Kerberos authentication test */
+        if (info.KerberosAuthTest != null)
+        {
+            Console.WriteLine();
+            ReportKerberosAuthTest(info.KerberosAuthTest);
+        }
     }
 
     private static void ReportCertificate(CertificateInfo cert, string title)
@@ -561,6 +568,49 @@ public static class ConsoleReporter
         else
         {
             Console.Write(text);
+        }
+    }
+
+    private static void ReportKerberosAuthTest(KerberosAuthResult authResult)
+    {
+        WriteHeader("Kerberos Authentication Test");
+        WriteField("Target SPN", authResult.Spn);
+
+        if (!authResult.Success)
+        {
+            WriteFieldColored("Result", "FAILED", authResult.Error ?? "Unknown error", ConsoleColor.Red);
+            return;
+        }
+
+        WriteField("Protocol", authResult.Protocol ?? "Unknown");
+
+        if (authResult.FellBackToNtlm)
+        {
+            WriteFieldColored("Result", "NTLM FALLBACK",
+                "Kerberos was not used — check SPN registration and client TGT",
+                ConsoleColor.Yellow);
+        }
+        else
+        {
+            if (authResult.KerberosEtype != null)
+            {
+                string etypeName = authResult.KerberosEtypeName ?? $"Unknown ({authResult.KerberosEtype})";
+                WriteField("Ticket Etype", $"{authResult.KerberosEtype} ({etypeName})");
+
+                if (authResult.UsesRc4)
+                {
+                    WriteFieldColored("RC4 Status", "IN USE",
+                        "RC4-HMAC (etype 23) — deprecated per CVE-2026-20833",
+                        ConsoleColor.Red);
+                }
+                else
+                {
+                    WriteFieldColored("RC4 Status", "Not in use", "OK", ConsoleColor.Green);
+                }
+            }
+
+            WriteColored("[PASS] Kerberos authentication succeeded.", ConsoleColor.Green);
+            Console.WriteLine();
         }
     }
 }

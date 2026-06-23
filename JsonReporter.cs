@@ -173,6 +173,22 @@ public static class JsonReporter
             }).ToList();
         }
 
+        /* Kerberos authentication test */
+        if (info.KerberosAuthTest != null)
+        {
+            output.KerberosAuthTest = new KerberosAuthTestJson
+            {
+                Success = info.KerberosAuthTest.Success,
+                Protocol = info.KerberosAuthTest.Protocol,
+                Spn = info.KerberosAuthTest.Spn,
+                FellBackToNtlm = info.KerberosAuthTest.FellBackToNtlm,
+                Error = info.KerberosAuthTest.Error,
+                KerberosEtype = info.KerberosAuthTest.KerberosEtype,
+                KerberosEtypeName = info.KerberosAuthTest.KerberosEtypeName,
+                UsesRc4 = info.KerberosAuthTest.UsesRc4
+            };
+        }
+
         return output;
     }
 
@@ -229,6 +245,7 @@ public static class JsonReporter
         public List<string>? ChainValidation { get; set; }
         public KerberosJson? Kerberos { get; set; }
         public List<SanConnectivityJson>? SanConnectivity { get; set; }
+        public KerberosAuthTestJson? KerberosAuthTest { get; set; }
     }
 
     private sealed class MetaJson
@@ -352,5 +369,17 @@ public static class JsonReporter
         public string? CertificateSubject { get; set; }
         public string? CertificateThumbprint { get; set; }
         public bool? IsEncrypted { get; set; }
+    }
+
+    private sealed class KerberosAuthTestJson
+    {
+        public bool Success { get; set; }
+        public string? Protocol { get; set; }
+        public string Spn { get; set; } = string.Empty;
+        public bool FellBackToNtlm { get; set; }
+        public string? Error { get; set; }
+        public int? KerberosEtype { get; set; }
+        public string? KerberosEtypeName { get; set; }
+        public bool UsesRc4 { get; set; }
     }
 }
