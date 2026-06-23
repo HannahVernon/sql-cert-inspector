@@ -130,7 +130,8 @@ public static class JsonReporter
                     Spn = e.Spn,
                     Found = e.Result?.Found ?? false,
                     AccountName = e.Result?.AccountName,
-                    AccountType = e.Result?.AccountType
+                    AccountType = e.Result?.AccountType,
+                    SupportedEncryptionTypes = e.Result?.SupportedEncryptionTypes
                 }).ToList(),
                 SpnLookupError = info.Kerberos.SpnLookupError,
                 SanSpnCoverage = info.Kerberos.SanSpnCoverage?.Select(s => new SanSpnJson
@@ -147,7 +148,8 @@ public static class JsonReporter
                     Spn = e.Spn,
                     Found = e.Result?.Found ?? false,
                     AccountName = e.Result?.AccountName,
-                    AccountType = e.Result?.AccountType
+                    AccountType = e.Result?.AccountType,
+                    SupportedEncryptionTypes = e.Result?.SupportedEncryptionTypes
                 }).ToList(),
                 Warnings = info.Kerberos.Warnings.Count > 0
                     ? info.Kerberos.Warnings.Select(w => new WarningJson { Severity = w.Severity.ToString(), Message = w.Message }).ToList()
@@ -328,6 +330,7 @@ public static class JsonReporter
         public bool Found { get; set; }
         public string? AccountName { get; set; }
         public string? AccountType { get; set; }
+        public int? SupportedEncryptionTypes { get; set; }
     }
 
     private sealed class SanSpnJson

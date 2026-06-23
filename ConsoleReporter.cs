@@ -250,6 +250,29 @@ public static class ConsoleReporter
                 WriteFieldColored(expected.Label, expected.Spn, status, color);
             }
 
+            /* Kerberos encryption types (CVE-2026-20833) */
+            var firstWithEtypes = kerberos.ExpectedSpns
+                .FirstOrDefault(s => s.Result?.Found == true && s.Result.SupportedEncryptionTypes != null);
+            if (firstWithEtypes?.Result != null)
+            {
+                Console.WriteLine();
+                int etypes = firstWithEtypes.Result.SupportedEncryptionTypes!.Value;
+                var enabledTypes = new List<string>();
+                if ((etypes & 0x1) != 0) enabledTypes.Add("DES-CBC-CRC");
+                if ((etypes & 0x2) != 0) enabledTypes.Add("DES-CBC-MD5");
+                if ((etypes & 0x4) != 0) enabledTypes.Add("RC4-HMAC");
+                if ((etypes & 0x8) != 0) enabledTypes.Add("AES128");
+                if ((etypes & 0x10) != 0) enabledTypes.Add("AES256");
+                if (enabledTypes.Count == 0) enabledTypes.Add("(default/not configured)");
+
+                bool hasRc4 = (etypes & 0x4) != 0;
+                ConsoleColor etypeColor = hasRc4 ? ConsoleColor.Yellow : ConsoleColor.Green;
+                WriteFieldColored("Encryption Types",
+                    $"0x{etypes:X} ({string.Join(", ", enabledTypes)})",
+                    hasRc4 ? "RC4 ENABLED — deprecated per CVE-2026-20833" : "OK",
+                    etypeColor);
+            }
+
             /* SAN SPN coverage (--full-spn-diagnostics) */
             if (kerberos.SanSpnCoverage is { Count: > 0 })
             {
