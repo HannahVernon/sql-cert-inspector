@@ -32,6 +32,8 @@ dotnet publish -p:PublishProfile=Properties\PublishProfiles\win-x64.pubxml
 
 The executable will be in `bin\publish\win-x64\sql-cert-inspector.exe`.
 
+The Release publish profile keeps .NET trimming disabled.  The Kerberos SPN diagnostics use `System.DirectoryServices` runtime behaviour that trimming removes, which can cause valid SPNs to appear as missing.  Do not enable `PublishTrimmed` for this application.
+
 ## Usage
 
 ```

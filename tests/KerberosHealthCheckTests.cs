@@ -223,6 +223,33 @@ public class KerberosHealthCheckTests
             w.Severity == WarningSeverity.Warning && w.Message.Contains("LDAP SPN lookup failed"));
     }
 
+    [Fact]
+    public void CnameDetected_SpnLookupError_DoesNotReportSpnsMissing()
+    {
+        var diag = new KerberosDiagnostics
+        {
+            RequestedHostname = "alias.example.com",
+            CnameTarget = "real-host.example.com",
+            SpnLookupError = "LDAP SPN lookup failed: DirectoryServicesException",
+            ExpectedSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/alias.example.com:1433", found: false),
+            },
+            CnameTargetSpns = new List<SpnExpectation>
+            {
+                MakeSpn("FQDN + Port", "MSSQLSvc/real-host.example.com:1433", found: false),
+            }
+        };
+
+        KerberosInspector.RunHealthChecks(diag, 1433, isNamedInstance: false);
+
+        Assert.Single(diag.Warnings);
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Message.Contains("No SPN registered", StringComparison.Ordinal));
+        Assert.DoesNotContain(diag.Warnings, w =>
+            w.Message.Contains("No SPN was found", StringComparison.Ordinal));
+    }
+
     private static SpnExpectation MakeSpn(string label, string spn, bool found, string? account = null)
     {
         return new SpnExpectation
