@@ -48,7 +48,8 @@ public static class KerberosInspector
             {
                 diag.CnameTargetSpns = BuildExpectedSpns(
                     diag.CnameTarget, port, instanceName, isPortExplicit, fullSpnDiagnostics);
-                PerformSpnLookup(diag.CnameTargetSpns, _ => { });
+                PerformSpnLookup(diag.CnameTargetSpns, e =>
+                    diag.SpnLookupError ??= e);
             }
         }
 
@@ -212,16 +213,19 @@ public static class KerberosInspector
 
     private static void PerformSpnLookup(List<SpnExpectation> spns, Action<string> onError)
     {
-        try
+        foreach (var expected in spns)
         {
-            foreach (var expected in spns)
+            try
             {
                 expected.Result = LookupSpn(expected.Spn);
             }
-        }
-        catch (Exception ex)
-        {
-            onError($"LDAP SPN lookup failed: {ex.Message}");
+            catch (Exception ex)
+            {
+                onError(
+                    $"LDAP SPN lookup failed for '{expected.Spn}': " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+                return;
+            }
         }
     }
 
@@ -229,50 +233,41 @@ public static class KerberosInspector
     {
         var result = new SpnLookupResult();
 
-        try
+        using var searcher = new DirectorySearcher
         {
-            using var searcher = new DirectorySearcher
+            Filter = $"(servicePrincipalName={EscapeLdapFilter(spn)})",
+            PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName", "msDS-SupportedEncryptionTypes" },
+            SearchScope = SearchScope.Subtree,
+            ServerTimeLimit = TimeSpan.FromSeconds(15),
+            ClientTimeout = TimeSpan.FromSeconds(30)
+        };
+
+        var searchResult = searcher.FindOne();
+        if (searchResult != null)
+        {
+            result.Found = true;
+            result.AccountName = GetPropertyValue(searchResult, "sAMAccountName");
+
+            /* Parse msDS-SupportedEncryptionTypes bitmask */
+            if (searchResult.Properties.Contains("msDS-SupportedEncryptionTypes") &&
+                searchResult.Properties["msDS-SupportedEncryptionTypes"].Count > 0)
             {
-                Filter = $"(servicePrincipalName={EscapeLdapFilter(spn)})",
-                PropertiesToLoad = { "servicePrincipalName", "sAMAccountName", "objectClass", "distinguishedName", "msDS-SupportedEncryptionTypes" },
-                SearchScope = SearchScope.Subtree,
-                ServerTimeLimit = TimeSpan.FromSeconds(15),
-                ClientTimeout = TimeSpan.FromSeconds(30)
-            };
-
-            var searchResult = searcher.FindOne();
-            if (searchResult != null)
-            {
-                result.Found = true;
-                result.AccountName = GetPropertyValue(searchResult, "sAMAccountName");
-
-                /* Parse msDS-SupportedEncryptionTypes bitmask */
-                if (searchResult.Properties.Contains("msDS-SupportedEncryptionTypes") &&
-                    searchResult.Properties["msDS-SupportedEncryptionTypes"].Count > 0)
-                {
-                    result.SupportedEncryptionTypes = (int)searchResult.Properties["msDS-SupportedEncryptionTypes"][0];
-                }
-
-                var objectClasses = searchResult.Properties["objectClass"];
-                if (objectClasses != null)
-                {
-                    if (objectClasses.Contains("computer"))
-                        result.AccountType = "Computer";
-                    else if (objectClasses.Contains("msDS-ManagedServiceAccount") ||
-                             objectClasses.Contains("msDS-GroupManagedServiceAccount"))
-                        result.AccountType = "Managed Service Account";
-                    else if (objectClasses.Contains("user"))
-                        result.AccountType = "User";
-                    else
-                        result.AccountType = "Unknown";
-                }
+                result.SupportedEncryptionTypes = (int)searchResult.Properties["msDS-SupportedEncryptionTypes"][0];
             }
-        }
-        catch (Exception)
-        {
-            /* If LDAP search fails for this specific SPN, mark as not found
-               but don't throw — the caller handles the overall error */
-            result.Found = false;
+
+            var objectClasses = searchResult.Properties["objectClass"];
+            if (objectClasses != null)
+            {
+                if (objectClasses.Contains("computer"))
+                    result.AccountType = "Computer";
+                else if (objectClasses.Contains("msDS-ManagedServiceAccount") ||
+                         objectClasses.Contains("msDS-GroupManagedServiceAccount"))
+                    result.AccountType = "Managed Service Account";
+                else if (objectClasses.Contains("user"))
+                    result.AccountType = "User";
+                else
+                    result.AccountType = "Unknown";
+            }
         }
 
         return result;
@@ -328,6 +323,13 @@ public static class KerberosInspector
             }
         }
 
+        /* Do not interpret an LDAP failure as a missing SPN. */
+        if (diag.SpnLookupError != null)
+        {
+            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning, diag.SpnLookupError));
+            return;
+        }
+
         if (diag.CnameTarget != null)
         {
             bool cnameSpnFound = diag.CnameTargetSpns != null &&
@@ -349,13 +351,6 @@ public static class KerberosInspector
                     $"'{diag.CnameTarget}'. No SPN was found for either the requested hostname " +
                     "or the canonical name. Kerberos authentication will NOT work for any client library."));
             }
-        }
-
-        /* SPN issues — only check when SPNs were actually looked up */
-        if (diag.SpnLookupError != null)
-        {
-            diag.Warnings.Add(new KerberosWarning(WarningSeverity.Warning, diag.SpnLookupError));
-            return;
         }
 
         if (diag.ExpectedSpns.Count == 0) return;

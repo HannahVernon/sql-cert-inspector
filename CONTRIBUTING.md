@@ -43,6 +43,8 @@ dotnet run -- --server myserver
 dotnet publish -p:PublishProfile=Properties\PublishProfiles\win-x64.pubxml
 ```
 
+Keep `PublishTrimmed` disabled.  SPN diagnostics depend on `System.DirectoryServices`; trimming can remove runtime behaviour required for LDAP lookups and produce false `NOT FOUND` results.  The publish profile intentionally produces an untrimmed, self-contained executable.
+
 ## How to Contribute
 
 ### Reporting Bugs
